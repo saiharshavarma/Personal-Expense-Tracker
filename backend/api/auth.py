@@ -3,10 +3,10 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
+import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,8 +16,22 @@ from db.database import get_db
 from db.models import UserPreferences
 
 router = APIRouter(tags=["auth"])
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    salt = bcrypt.gensalt(rounds=12)
+    hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
+    return hashed.decode("utf-8")
+
+
+def _verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against a bcrypt hash."""
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -101,7 +115,7 @@ async def setup(body: SetupRequest, db: AsyncSession = Depends(get_db)):
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    prefs.password_hash = pwd_context.hash(body.password)
+    prefs.password_hash = _hash_password(body.password)
     prefs.onboarding_complete = True
     await db.commit()
 
@@ -114,7 +128,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     prefs = await get_prefs(db)
     if not prefs.onboarding_complete or not prefs.password_hash:
         raise HTTPException(status_code=400, detail="Setup required first")
-    if not pwd_context.verify(body.password, prefs.password_hash):
+    if not _verify_password(body.password, prefs.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect password")
 
     token = create_access_token({"sub": "local-user", "type": "password"})
@@ -128,14 +142,14 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     prefs = await get_prefs(db)
-    if not pwd_context.verify(body.current_password, prefs.password_hash or ""):
+    if not _verify_password(body.current_password, prefs.password_hash or ""):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if body.new_password != body.confirm_new_password:
         raise HTTPException(status_code=400, detail="New passwords do not match")
     if len(body.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    prefs.password_hash = pwd_context.hash(body.new_password)
+    prefs.password_hash = _hash_password(body.new_password)
     await db.commit()
     return {"message": "Password updated"}
 

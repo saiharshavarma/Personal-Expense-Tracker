@@ -31,6 +31,7 @@ class TransactionCreate(BaseModel):
     tags: Optional[List[str]] = None
     is_reimbursable: bool = False
     reimbursement_source: Optional[str] = None
+    reimbursement_status: str = "not_reimbursable"
     expected_reimbursement: Optional[Decimal] = None
     is_recurring: bool = False
     frequency: Optional[str] = None
@@ -114,8 +115,19 @@ async def list_transactions(
     date_to: Optional[date] = None,
     account_id: Optional[uuid.UUID] = None,
     category: Optional[str] = None,
+    subcategory: Optional[str] = None,
     direction: Optional[str] = None,
     needs_review: Optional[bool] = None,
+    is_reimbursable: Optional[bool] = None,
+    reimbursement_status: Optional[str] = None,
+    is_recurring: Optional[bool] = None,
+    need_want_savings: Optional[str] = None,
+    fixed_variable: Optional[str] = None,
+    personal_work_shared: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    source: Optional[str] = None,
+    min_amount: Optional[Decimal] = None,
+    max_amount: Optional[Decimal] = None,
     search: Optional[str] = None,
     sort_by: str = "date",
     sort_dir: str = "desc",
@@ -132,14 +144,37 @@ async def list_transactions(
         filters.append(Transaction.account_id == account_id)
     if category:
         filters.append(Transaction.category == category)
+    if subcategory:
+        filters.append(Transaction.subcategory == subcategory)
     if direction:
         filters.append(Transaction.direction == direction)
     if needs_review is not None:
         filters.append(Transaction.needs_review == needs_review)
+    if is_reimbursable is not None:
+        filters.append(Transaction.is_reimbursable == is_reimbursable)
+    if reimbursement_status:
+        filters.append(Transaction.reimbursement_status == reimbursement_status)
+    if is_recurring is not None:
+        filters.append(Transaction.is_recurring == is_recurring)
+    if need_want_savings:
+        filters.append(Transaction.need_want_savings == need_want_savings)
+    if fixed_variable:
+        filters.append(Transaction.fixed_variable == fixed_variable)
+    if personal_work_shared:
+        filters.append(Transaction.personal_work_shared == personal_work_shared)
+    if transaction_type:
+        filters.append(Transaction.transaction_type == transaction_type)
+    if source:
+        filters.append(Transaction.source == source)
+    if min_amount is not None:
+        filters.append(Transaction.amount >= min_amount)
+    if max_amount is not None:
+        filters.append(Transaction.amount <= max_amount)
     if search:
         filters.append(or_(
             Transaction.description.ilike(f"%{search}%"),
             Transaction.merchant.ilike(f"%{search}%"),
+            Transaction.description_clean.ilike(f"%{search}%"),
         ))
     if filters:
         q = q.where(and_(*filters))
@@ -262,6 +297,17 @@ async def bulk_action(
             existing = set(t.tags or [])
             existing.update(body.payload.get("tags", []))
             t.tags = list(existing)
+            t.updated_at = datetime.utcnow()
+        elif body.action == "update":
+            allowed = {
+                "category", "subcategory", "need_want_savings", "fixed_variable",
+                "personal_work_shared", "is_reimbursable", "reimbursement_source",
+                "reimbursement_status", "expected_reimbursement", "notes",
+                "needs_review", "ai_reviewed", "is_recurring",
+            }
+            for field, value in body.payload.items():
+                if field in allowed and hasattr(t, field):
+                    setattr(t, field, value)
             t.updated_at = datetime.utcnow()
         updated += 1
 

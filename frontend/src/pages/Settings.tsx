@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
-  Database, Download, Shield, ChevronRight, Sun, Moon, Check
+  Database, Download, Shield, ChevronRight, Sun, Moon, Check,
+  Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -12,7 +13,10 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
 import { useUIStore } from '@/store/ui'
+import { useAuthStore } from '@/store'
+import { api } from '@/utils/apiClient'
 
 type SettingsTab = 'accounts' | 'categories' | 'ai' | 'ios' | 'appearance' | 'backup' | 'security'
 
@@ -301,38 +305,169 @@ function BackupTab() {
 }
 
 function SecurityTab() {
+  const { status, enrollTouchId, refreshStatus, logout } = useAuthStore()
+  const [enrolling, setEnrolling] = useState(false)
+  const [enrollMsg, setEnrollMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const [changingPw, setChangingPw] = useState(false)
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' })
+  const [showPw, setShowPw] = useState(false)
+  const [pwMsg, setPwMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [pwLoading, setPwLoading] = useState(false)
+
+  const handleReenroll = async () => {
+    setEnrolling(true)
+    setEnrollMsg(null)
+    try {
+      await enrollTouchId()
+      await refreshStatus()
+      setEnrollMsg({ type: 'success', text: 'Touch ID enrolled successfully.' })
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('cancelled') || msg.includes('abort') || msg.includes('NotAllowed')) {
+        setEnrollMsg({ type: 'error', text: 'Enrollment cancelled.' })
+      } else {
+        setEnrollMsg({ type: 'error', text: msg || 'Enrollment failed.' })
+      }
+    } finally {
+      setEnrolling(false)
+    }
+  }
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setPwMsg(null)
+    if (pwForm.next !== pwForm.confirm) { setPwMsg({ type: 'error', text: 'New passwords do not match.' }); return }
+    if (pwForm.next.length < 6) { setPwMsg({ type: 'error', text: 'Password must be at least 6 characters.' }); return }
+    setPwLoading(true)
+    try {
+      await api.post('/auth/change-password', {
+        current_password: pwForm.current,
+        new_password: pwForm.next,
+        confirm_new_password: pwForm.confirm,
+      })
+      setPwMsg({ type: 'success', text: 'Password updated.' })
+      setPwForm({ current: '', next: '', confirm: '' })
+      setChangingPw(false)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setPwMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to update password.' })
+    } finally {
+      setPwLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
+      {/* Password */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Authentication</CardTitle>
-          <CardDescription>Manage your password and biometric unlock</CardDescription>
+          <CardTitle className="text-base flex items-center gap-2">
+            <KeyRound className="w-4 h-4" /> Password
+          </CardTitle>
+          <CardDescription>Used as fallback when Touch ID is unavailable</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between py-2 border-b">
-            <div>
-              <p className="text-sm font-medium">Password</p>
-              <p className="text-xs text-muted-foreground">Used as fallback when TouchID is unavailable</p>
-            </div>
-            <Button size="sm" variant="ghost" className="text-xs">Change</Button>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <p className="text-sm font-medium">TouchID / Face ID</p>
-              <p className="text-xs text-muted-foreground">Platform authenticator via WebAuthn</p>
-            </div>
-            <Button size="sm" variant="ghost" className="text-xs">Re-enroll</Button>
-          </div>
+        <CardContent>
+          {!changingPw ? (
+            <Button size="sm" variant="outline" onClick={() => { setChangingPw(true); setPwMsg(null) }}>
+              Change Password
+            </Button>
+          ) : (
+            <form onSubmit={handleChangePassword} className="space-y-3 max-w-sm">
+              <div className="space-y-1">
+                <Label className="text-xs">Current Password</Label>
+                <div className="relative">
+                  <Input type={showPw ? 'text' : 'password'} value={pwForm.current}
+                    onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))}
+                    placeholder="Current password" className="pr-8" />
+                  <button type="button" onClick={() => setShowPw(v => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground">
+                    {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">New Password</Label>
+                <Input type={showPw ? 'text' : 'password'} value={pwForm.next}
+                  onChange={e => setPwForm(f => ({ ...f, next: e.target.value }))}
+                  placeholder="At least 6 characters" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Confirm New Password</Label>
+                <Input type={showPw ? 'text' : 'password'} value={pwForm.confirm}
+                  onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))}
+                  placeholder="Repeat new password" />
+              </div>
+              {pwMsg && (
+                <p className={`text-xs flex items-center gap-1 ${pwMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+                  {pwMsg.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                  {pwMsg.text}
+                </p>
+              )}
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" disabled={pwLoading}>
+                  {pwLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Save
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setChangingPw(false); setPwMsg(null) }}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          )}
         </CardContent>
       </Card>
 
+      {/* Touch ID */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Fingerprint className="w-4 h-4" /> Touch ID / Face ID
+          </CardTitle>
+          <CardDescription>Platform authenticator via WebAuthn (stored in your device's secure enclave)</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            {status?.has_webauthn
+              ? <Badge variant="outline" className="text-green-500 border-green-500/30 gap-1"><CheckCircle2 className="w-3 h-3" />Enrolled</Badge>
+              : <Badge variant="outline" className="text-muted-foreground gap-1"><AlertCircle className="w-3 h-3" />Not enrolled</Badge>
+            }
+          </div>
+
+          {/* Chrome iCloud Keychain note */}
+          <div className="rounded-md bg-muted/50 border p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Where is my passkey stored?</p>
+            <p>Chrome on macOS defaults to <strong>Google Password Manager</strong>. To save to <strong>iCloud Keychain</strong> instead:</p>
+            <ol className="list-decimal list-inside space-y-0.5 ml-1">
+              <li>Click "Re-enroll" below</li>
+              <li>In Chrome's passkey dialog, click <strong>"Use a different device…"</strong> or <strong>"More options"</strong></li>
+              <li>Choose <strong>"iPhone, iPad, or Android device"</strong> or <strong>"Security key"</strong> — or open Safari and enroll there to use iCloud Keychain natively</li>
+            </ol>
+            <p className="pt-1">Safari always saves passkeys to iCloud Keychain automatically.</p>
+          </div>
+
+          <Button size="sm" variant="outline" onClick={handleReenroll} disabled={enrolling}
+            className="flex items-center gap-2">
+            {enrolling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Fingerprint className="w-3.5 h-3.5" />}
+            {status?.has_webauthn ? 'Re-enroll Touch ID' : 'Enroll Touch ID'}
+          </Button>
+
+          {enrollMsg && (
+            <p className={`text-xs flex items-center gap-1 ${enrollMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+              {enrollMsg.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+              {enrollMsg.text}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Session */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Session</CardTitle>
-          <CardDescription>JWT token expires after 24 hours of inactivity</CardDescription>
+          <CardDescription>JWT token expires after 24 hours</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="destructive" size="sm" className="w-full">Sign Out</Button>
+          <Button variant="destructive" size="sm" onClick={logout}>Sign Out</Button>
         </CardContent>
       </Card>
     </div>

@@ -8,14 +8,14 @@ interface AuthGateProps {
 }
 
 export function AuthGate({ children }: AuthGateProps) {
-  const { isAuthenticated, status, initialize, isLoading } = useAuthStore()
+  const { isAuthenticated, status, initialize, isInitializing } = useAuthStore()
 
   useEffect(() => {
     initialize()
   }, [])
 
-  // Still initializing
-  if (isLoading || status === null) {
+  // Still booting — waiting for /auth/status to come back
+  if (isInitializing || status === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-pulse text-muted-foreground text-sm">Loading…</div>

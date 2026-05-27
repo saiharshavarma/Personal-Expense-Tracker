@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Shield, Fingerprint, Eye, EyeOff, ArrowRight, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import { useAuthStore } from '@/store'
 
 export function SetupScreen() {
-  const { setupPassword, enrollTouchId, isLoading, error, clearError } = useAuthStore()
+  const { setupPassword, enrollTouchId, completeSetup, isLoading, error, clearError } = useAuthStore()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -37,11 +37,19 @@ export function SetupScreen() {
   const handleEnrollTouchId = async () => {
     try {
       await enrollTouchId()
-      setStep('done')
     } catch {
-      setStep('done') // TouchID optional — proceed anyway
+      // TouchID optional — proceed anyway
     }
+    setStep('done')
   }
+
+  // Navigate to dashboard only after the 'done' step is shown briefly
+  useEffect(() => {
+    if (step === 'done') {
+      const t = setTimeout(() => completeSetup(), 1500)
+      return () => clearTimeout(t)
+    }
+  }, [step, completeSetup])
 
   if (step === 'touchid') {
     return (

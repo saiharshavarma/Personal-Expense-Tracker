@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { api } from '@/utils/apiClient'
 import type { Transaction, PaginatedResponse, TransactionFilters } from '@/types'
 
+interface BulkActionPayload {
+  action: 'categorize' | 'mark_reimbursable' | 'delete' | 'tag'
+  payload?: Record<string, unknown>
+}
+
 interface TransactionsStore {
   transactions: Transaction[]
   total: number
@@ -17,6 +22,7 @@ interface TransactionsStore {
   addTransaction: (data: Partial<Transaction>) => Promise<Transaction>
   updateTransaction: (id: string, data: Partial<Transaction>) => Promise<Transaction>
   deleteTransaction: (id: string) => Promise<void>
+  bulkAction: (ids: string[], action: BulkActionPayload) => Promise<void>
 }
 
 const defaultFilters: TransactionFilters = {
@@ -80,5 +86,24 @@ export const useTransactionsStore = create<TransactionsStore>((set, get) => ({
       transactions: s.transactions.filter((t) => t.id !== id),
       total: s.total - 1,
     }))
+  },
+
+  bulkAction: async (ids, { action, payload = {} }) => {
+    await api.post('/transactions/bulk', { transaction_ids: ids, action, payload })
+    if (action === 'delete') {
+      set((s) => ({
+        transactions: s.transactions.filter((t) => !ids.includes(t.id)),
+        total: s.total - ids.length,
+      }))
+    } else {
+      // Re-fetch to get updated data
+      const { data } = await api.get<PaginatedResponse<Transaction>>('/transactions', {
+        params: Object.fromEntries(
+          Object.entries(useTransactionsStore.getState().filters)
+            .filter(([, v]) => v !== undefined && v !== null && v !== '')
+        ),
+      })
+      set({ transactions: data.items, total: data.total })
+    }
   },
 }))

@@ -25,7 +25,8 @@ function isTokenValid(): boolean {
 
 interface AuthStore {
   isAuthenticated: boolean
-  isLoading: boolean
+  isInitializing: boolean  // true only during the initial initialize() boot call
+  isLoading: boolean       // true during login/setup/enroll operations
   status: AuthStatus | null
   error: string | null
 
@@ -33,6 +34,7 @@ interface AuthStore {
   login: (password: string) => Promise<void>
   loginWithTouchId: () => Promise<void>
   setupPassword: (password: string, confirmPassword: string) => Promise<void>
+  completeSetup: () => void
   enrollTouchId: () => Promise<void>
   logout: () => void
   clearError: () => void
@@ -41,6 +43,7 @@ interface AuthStore {
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   isAuthenticated: isTokenValid(),
+  isInitializing: true,
   isLoading: false,
   status: null,
   error: null,
@@ -50,9 +53,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({ isAuthenticated: true })
       try {
         const { data } = await api.get<AuthStatus>('/auth/status')
-        set({ status: data })
+        set({ status: data, isInitializing: false })
       } catch {
-        // status endpoint is best-effort
+        set({ isInitializing: false })
       }
       return
     }
@@ -60,9 +63,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({ isAuthenticated: false })
     try {
       const { data } = await api.get<AuthStatus>('/auth/status')
-      set({ status: data })
+      set({ status: data, isInitializing: false })
     } catch {
-      set({ status: { onboarding_complete: false, has_webauthn: false, has_password: false } })
+      set({ status: { onboarding_complete: false, has_webauthn: false, has_password: false }, isInitializing: false })
     }
   },
 
@@ -107,12 +110,21 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       const { data } = await api.post('/auth/setup', { password, confirm_password: confirmPassword })
       saveToken(data.access_token)
-      set({ isAuthenticated: true, isLoading: false })
-      get().refreshStatus()
+      // Don't set isAuthenticated or refresh status yet — refreshStatus would flip
+      // onboarding_complete to true, causing AuthGate to swap SetupScreen for LockScreen
+      // before the Touch ID enrollment step can be shown.
+      // completeSetup() handles both once enrollment is done or skipped.
+      set({ isLoading: false })
     } catch (e) {
       set({ isLoading: false, error: getAuthErrorMessage(e) })
       throw e
     }
+  },
+
+  completeSetup: () => {
+    // Now safe to refresh status and mark authenticated — Touch ID step is done
+    get().refreshStatus()
+    set({ isAuthenticated: true })
   },
 
   enrollTouchId: async () => {

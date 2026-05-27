@@ -24,7 +24,14 @@ class AccountCreate(BaseModel):
     icon: Optional[str] = None
 
 
-class AccountUpdate(AccountCreate):
+class AccountUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    institution: Optional[str] = None
+    last_four: Optional[str] = None
+    currency: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
     is_active: Optional[bool] = None
 
 

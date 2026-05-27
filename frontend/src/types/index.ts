@@ -223,7 +223,12 @@ export interface TransactionFilters {
   reimbursement_status?: ReimbursementStatus
   is_recurring?: boolean
   need_want_savings?: NeedWantSavings
+  fixed_variable?: FixedVariable
   personal_work_shared?: PersonalWorkShared
+  transaction_type?: string
+  source?: TransactionSource
+  min_amount?: number
+  max_amount?: number
   search?: string
   sort_by?: string
   sort_dir?: 'asc' | 'desc'
