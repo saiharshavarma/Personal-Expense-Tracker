@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
   Database, Download, Shield, ChevronRight, Sun, Moon, Check,
-  Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff
+  Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -97,8 +97,58 @@ function CategoriesTab() {
 }
 
 function AITab() {
-  const [aiEnabled, setAiEnabled] = useState(false)
+  const [aiCategorize, setAiCategorize] = useState(true)
+  const [aiInsights, setAiInsights] = useState(false)
   const [provider, setProvider] = useState<'anthropic' | 'openai'>('anthropic')
+  const [modelCat, setModelCat] = useState('claude-haiku-4-5')
+  const [modelInsights, setModelInsights] = useState('claude-sonnet-4-5')
+  const [anthropicKey, setAnthropicKey] = useState('')
+  const [openaiKey, setOpenaiKey] = useState('')
+  const [showAnthropicKey, setShowAnthropicKey] = useState(false)
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    api.get('/preferences').then(r => {
+      const p = r.data
+      if (p.ai_provider) setProvider(p.ai_provider)
+      if (p.ai_model_categorization) setModelCat(p.ai_model_categorization)
+      if (p.ai_model_insights) setModelInsights(p.ai_model_insights)
+      if (typeof p.ai_insights_opt_in === 'boolean') setAiInsights(p.ai_insights_opt_in)
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      await api.put('/preferences', {
+        ai_provider: provider,
+        ai_model_categorization: modelCat,
+        ai_model_insights: modelInsights,
+        ai_insights_opt_in: aiInsights,
+      })
+      setSaveMsg({ type: 'success', text: 'Preferences saved.' })
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setSaveMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to save preferences.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const ANTHROPIC_MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-5']
+  const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo']
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -113,7 +163,7 @@ function AITab() {
               <Label htmlFor="ai-categorize" className="text-sm font-medium">AI Auto-Categorization</Label>
               <p className="text-xs text-muted-foreground mt-0.5">Use Claude Haiku to categorize imported transactions</p>
             </div>
-            <Switch id="ai-categorize" defaultChecked />
+            <Switch id="ai-categorize" checked={aiCategorize} onCheckedChange={setAiCategorize} />
           </div>
           <Separator />
           <div className="flex items-center justify-between">
@@ -121,7 +171,7 @@ function AITab() {
               <Label htmlFor="ai-insights" className="text-sm font-medium">AI Insights (Ask AI page)</Label>
               <p className="text-xs text-muted-foreground mt-0.5">Enable the Ask AI page with Claude Sonnet</p>
             </div>
-            <Switch id="ai-insights" checked={aiEnabled} onCheckedChange={setAiEnabled} />
+            <Switch id="ai-insights" checked={aiInsights} onCheckedChange={setAiInsights} />
           </div>
         </CardContent>
       </Card>
@@ -133,9 +183,9 @@ function AITab() {
         </CardHeader>
         <CardContent className="space-y-3">
           {[
-            { id: 'anthropic' as const, name: 'Anthropic (Claude)', model: 'claude-haiku-4-5', recommended: true },
-            { id: 'openai' as const, name: 'OpenAI', model: 'gpt-4o-mini', recommended: false },
-          ].map(({ id, name, model, recommended }) => (
+            { id: 'anthropic' as const, name: 'Anthropic (Claude)', recommended: true },
+            { id: 'openai' as const, name: 'OpenAI', recommended: false },
+          ].map(({ id, name, recommended }) => (
             <button
               key={id}
               onClick={() => setProvider(id)}
@@ -148,7 +198,6 @@ function AITab() {
                   <span className="text-sm font-medium">{name}</span>
                   {recommended && <Badge variant="secondary" className="text-xs">Recommended</Badge>}
                 </div>
-                <span className="text-xs text-muted-foreground">{model}</span>
               </div>
               {provider === id && <Check className="w-4 h-4 text-primary" />}
             </button>
@@ -158,21 +207,104 @@ function AITab() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">API Keys</CardTitle>
-          <CardDescription>Stored in your local .env file — never transmitted anywhere</CardDescription>
+          <CardTitle className="text-base">Model Selection</CardTitle>
+          <CardDescription>Choose models for categorization and insights</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'].map((key) => (
-            <div key={key} className="flex items-center justify-between py-2 border-b last:border-0">
-              <div>
-                <p className="text-sm font-medium font-mono">{key}</p>
-                <p className="text-xs text-muted-foreground">Set in .env file</p>
-              </div>
-              <Badge variant="outline" className="text-xs">Configured via .env</Badge>
-            </div>
-          ))}
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Categorization Model</Label>
+            <select
+              value={modelCat}
+              onChange={e => setModelCat(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {(provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Insights Model</Label>
+            <select
+              value={modelInsights}
+              onChange={e => setModelInsights(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {(provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">API Keys</CardTitle>
+          <CardDescription>Keys are stored server-side in your .env — enter here to update</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Anthropic */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-mono">ANTHROPIC_API_KEY</Label>
+            <div className="relative">
+              <Input
+                type={showAnthropicKey ? 'text' : 'password'}
+                placeholder="sk-ant-…"
+                value={anthropicKey}
+                onChange={e => setAnthropicKey(e.target.value)}
+                className="pr-8 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => setShowAnthropicKey(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showAnthropicKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {/* OpenAI */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-mono">OPENAI_API_KEY</Label>
+            <div className="relative">
+              <Input
+                type={showOpenaiKey ? 'text' : 'password'}
+                placeholder="sk-…"
+                value={openaiKey}
+                onChange={e => setOpenaiKey(e.target.value)}
+                className="pr-8 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => setShowOpenaiKey(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showOpenaiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">Leave blank to keep the existing key. Keys are stored in your server .env and never sent to the browser after saving.</p>
+        </CardContent>
+      </Card>
+
+      {/* Save */}
+      <div className="flex items-center gap-3">
+        <Button onClick={handleSave} disabled={saving} size="sm">
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save AI Settings
+        </Button>
+        {saveMsg && (
+          <p className={`text-xs flex items-center gap-1 ${saveMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+            {saveMsg.type === 'success'
+              ? <CheckCircle2 className="w-3.5 h-3.5" />
+              : <AlertCircle className="w-3.5 h-3.5" />}
+            {saveMsg.text}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

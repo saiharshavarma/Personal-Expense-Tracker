@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,10 +10,13 @@ from db.models import MerchantRule
 class RulesEngine:
     async def match(self, description: str, db: AsyncSession) -> Optional[dict]:
         """
-        Phase 4: Match description against merchant_rules table.
-        Returns categorization dict if confidence >= 0.90, else None.
+        Match description against merchant_rules table.
+        Returns categorization dict if any rule matches, else None.
+        Rules are ordered by confidence desc — first match wins.
         """
-        result = await db.execute(select(MerchantRule).order_by(MerchantRule.confidence.desc()))
+        result = await db.execute(
+            select(MerchantRule).order_by(MerchantRule.confidence.desc())
+        )
         rules = result.scalars().all()
 
         for rule in rules:
@@ -23,6 +27,7 @@ class RulesEngine:
                     "merchant_clean": rule.merchant_clean,
                     "need_want_savings": rule.need_want_savings,
                     "is_reimbursable": rule.is_reimbursable,
+                    "personal_work_shared": rule.personal_work_shared,
                     "is_recurring": rule.is_recurring,
                     "confidence": float(rule.confidence),
                     "rule_id": str(rule.id),
@@ -32,7 +37,8 @@ class RulesEngine:
     def _matches(self, description: str, rule: MerchantRule) -> bool:
         desc = description.upper()
         pattern = rule.pattern.upper()
-        match rule.match_type:
+        match_type = rule.match_type or "contains"
+        match match_type:
             case "exact":
                 return desc == pattern
             case "contains":
@@ -44,7 +50,56 @@ class RulesEngine:
             case _:
                 return pattern in desc
 
-    async def record_correction(self, description: str, category: str, subcategory: str,
-                                 merchant_clean: str, db: AsyncSession) -> None:
-        """Phase 4: Save user correction as a new or updated merchant rule."""
-        raise NotImplementedError("Implemented in Phase 4")
+    async def record_correction(
+        self,
+        description: str,
+        category: str,
+        subcategory: str,
+        merchant_clean: str,
+        db: AsyncSession,
+        need_want_savings: Optional[str] = None,
+    ) -> None:
+        """
+        Save a user correction as a merchant rule so future matches auto-apply.
+        If a rule for this description already exists, update it.
+        Otherwise create a new 'contains' rule with confidence=1.0.
+        """
+        from datetime import datetime
+
+        # Normalise: use uppercase, strip common noise
+        pattern = description.strip().upper()
+        # Shorten to first meaningful chunk (before digits/card suffix)
+        pattern = re.split(r"\s+\d{4,}", pattern)[0].strip()
+        if not pattern:
+            return
+
+        # Check for existing rule with the same pattern
+        result = await db.execute(
+            select(MerchantRule).where(MerchantRule.pattern == pattern)
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.category = category
+            existing.subcategory = subcategory
+            existing.merchant_clean = merchant_clean
+            if need_want_savings:
+                existing.need_want_savings = need_want_savings
+            existing.times_applied = (existing.times_applied or 0) + 1
+            existing.confidence = Decimal("1.000")
+            existing.updated_at = datetime.utcnow()
+        else:
+            new_rule = MerchantRule(
+                pattern=pattern,
+                match_type="contains",
+                merchant_clean=merchant_clean,
+                category=category,
+                subcategory=subcategory,
+                need_want_savings=need_want_savings,
+                confidence=Decimal("1.000"),
+                times_applied=1,
+                times_overridden=0,
+            )
+            db.add(new_rule)
+
+        await db.flush()

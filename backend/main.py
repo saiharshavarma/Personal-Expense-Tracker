@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.database import engine, Base
 from api import auth, accounts, transactions, budgets, reimbursements, \
-    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup
+    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences
 
 
 @asynccontextmanager
@@ -51,3 +51,4 @@ app.include_router(ios.router, prefix="/api/ios")
 app.include_router(ai_insights.router, prefix="/api/ai")
 app.include_router(export.router, prefix="/api/export")
 app.include_router(backup.router, prefix="/api/backup")
+app.include_router(preferences.router, prefix="/api/preferences")
