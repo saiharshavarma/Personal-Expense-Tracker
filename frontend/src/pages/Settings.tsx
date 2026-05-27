@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
   Database, Download, Shield, ChevronRight, Sun, Moon, Check,
-  Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save
+  Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save,
+  Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -15,8 +16,9 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Input } from '@/components/ui/input'
 import { useUIStore } from '@/store/ui'
-import { useAuthStore } from '@/store'
+import { useAuthStore, usePreferencesStore } from '@/store'
 import { api } from '@/utils/apiClient'
+import { AccountsModal } from '@/components/accounts/AccountsModal'
 
 type SettingsTab = 'accounts' | 'categories' | 'ai' | 'ios' | 'appearance' | 'backup' | 'security'
 
@@ -31,6 +33,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ classN
 ]
 
 function AccountsTab() {
+  const [accountsOpen, setAccountsOpen] = useState(false)
   return (
     <div className="space-y-4">
       <Card>
@@ -38,11 +41,14 @@ function AccountsTab() {
           <CardTitle className="text-base">Payment Accounts</CardTitle>
           <CardDescription>Manage your credit cards, bank accounts, and payment methods</CardDescription>
         </CardHeader>
-        <CardContent className="py-8 text-center">
-          <CreditCard className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-          <p className="font-medium">No accounts configured</p>
-          <p className="text-sm text-muted-foreground mt-1">Add your accounts to track transactions per card or bank</p>
-          <Button size="sm" variant="outline" className="mt-4">Add Account</Button>
+        <CardContent>
+          <p className="text-sm text-muted-foreground mb-4">
+            Add accounts to track which card or bank each transaction belongs to.
+          </p>
+          <Button size="sm" onClick={() => setAccountsOpen(true)}>
+            <CreditCard className="w-4 h-4" />
+            Manage Accounts
+          </Button>
         </CardContent>
       </Card>
       <Card>
@@ -53,10 +59,15 @@ function AccountsTab() {
         <CardContent className="py-8 text-center">
           <Repeat className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
           <p className="font-medium">No income schedules</p>
-          <p className="text-sm text-muted-foreground mt-1">Define your income so we can calculate your savings rate</p>
-          <Button size="sm" variant="outline" className="mt-4">Add Income Schedule</Button>
+          <p className="text-sm text-muted-foreground mt-1">
+            Income is currently inferred from credit transactions. Define explicit schedules here for more accurate savings rate tracking.
+          </p>
+          <Button size="sm" variant="outline" className="mt-4" disabled>
+            Coming soon
+          </Button>
         </CardContent>
       </Card>
+      <AccountsModal open={accountsOpen} onOpenChange={setAccountsOpen} />
     </div>
   )
 }
@@ -97,52 +108,45 @@ function CategoriesTab() {
 }
 
 function AITab() {
-  const [aiCategorize, setAiCategorize] = useState(true)
-  const [aiInsights, setAiInsights] = useState(false)
-  const [provider, setProvider] = useState<'anthropic' | 'openai'>('anthropic')
-  const [modelCat, setModelCat] = useState('claude-haiku-4-5')
-  const [modelInsights, setModelInsights] = useState('claude-sonnet-4-5')
+  const { prefs, loading, saving, load, update } = usePreferencesStore()
   const [anthropicKey, setAnthropicKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
   const [showAnthropicKey, setShowAnthropicKey] = useState(false)
   const [showOpenaiKey, setShowOpenaiKey] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [keyMsg, setKeyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [keySaving, setKeySaving] = useState(false)
 
-  useEffect(() => {
-    api.get('/preferences').then(r => {
-      const p = r.data
-      if (p.ai_provider) setProvider(p.ai_provider)
-      if (p.ai_model_categorization) setModelCat(p.ai_model_categorization)
-      if (p.ai_model_insights) setModelInsights(p.ai_model_insights)
-      if (typeof p.ai_insights_opt_in === 'boolean') setAiInsights(p.ai_insights_opt_in)
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+  useEffect(() => { load() }, [load])
 
-  const handleSave = async () => {
-    setSaving(true)
-    setSaveMsg(null)
-    try {
-      await api.put('/preferences', {
-        ai_provider: provider,
-        ai_model_categorization: modelCat,
-        ai_model_insights: modelInsights,
-        ai_insights_opt_in: aiInsights,
-      })
-      setSaveMsg({ type: 'success', text: 'Preferences saved.' })
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } }
-      setSaveMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to save preferences.' })
-    } finally {
-      setSaving(false)
-    }
-  }
+  const provider = prefs?.ai_provider ?? 'anthropic'
+  const modelCat = prefs?.ai_model_categorization ?? 'claude-haiku-4-5'
+  const modelInsights = prefs?.ai_model_insights ?? 'claude-sonnet-4-5'
+  const aiInsights = prefs?.ai_insights_opt_in ?? false
 
   const ANTHROPIC_MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-5']
   const OPENAI_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo']
 
-  if (loading) {
+  const handleSaveKeys = async () => {
+    setKeySaving(true)
+    setKeyMsg(null)
+    try {
+      const patch: Record<string, string> = {}
+      if (anthropicKey.trim()) patch.anthropic_api_key = anthropicKey.trim()
+      if (openaiKey.trim()) patch.openai_api_key = openaiKey.trim()
+      await api.put('/preferences', patch)
+      setAnthropicKey('')
+      setOpenaiKey('')
+      setKeyMsg({ type: 'success', text: 'API keys saved.' })
+      load() // refresh to get updated key-set flags
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setKeyMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to save keys.' })
+    } finally {
+      setKeySaving(false)
+    }
+  }
+
+  if (loading && !prefs) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -152,26 +156,25 @@ function AITab() {
 
   return (
     <div className="space-y-4">
+      {saving && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
+          <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">AI Features</CardTitle>
-          <CardDescription>Control how AI is used in your finance dashboard</CardDescription>
+          <CardDescription>Changes apply instantly across all pages</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label htmlFor="ai-categorize" className="text-sm font-medium">AI Auto-Categorization</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">Use Claude Haiku to categorize imported transactions</p>
-            </div>
-            <Switch id="ai-categorize" checked={aiCategorize} onCheckedChange={setAiCategorize} />
-          </div>
-          <Separator />
           <div className="flex items-center justify-between">
             <div>
               <Label htmlFor="ai-insights" className="text-sm font-medium">AI Insights (Ask AI page)</Label>
               <p className="text-xs text-muted-foreground mt-0.5">Enable the Ask AI page with Claude Sonnet</p>
             </div>
-            <Switch id="ai-insights" checked={aiInsights} onCheckedChange={setAiInsights} />
+            {/* Auto-saves immediately — no Save button needed */}
+            <Switch id="ai-insights" checked={aiInsights} onCheckedChange={(v) => update({ ai_insights_opt_in: v })} />
           </div>
         </CardContent>
       </Card>
@@ -179,7 +182,7 @@ function AITab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">AI Provider</CardTitle>
-          <CardDescription>Choose which AI provider to use for categorization</CardDescription>
+          <CardDescription>Choose which AI provider to use for categorization and insights</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {[
@@ -188,7 +191,7 @@ function AITab() {
           ].map(({ id, name, recommended }) => (
             <button
               key={id}
-              onClick={() => setProvider(id)}
+              onClick={() => update({ ai_provider: id })}
               className={`w-full flex items-center justify-between p-3 rounded-lg border transition-colors ${
                 provider === id ? 'border-primary bg-primary/5' : 'hover:border-primary/50'
               }`}
@@ -215,7 +218,7 @@ function AITab() {
             <Label className="text-xs">Categorization Model</Label>
             <select
               value={modelCat}
-              onChange={e => setModelCat(e.target.value)}
+              onChange={e => update({ ai_model_categorization: e.target.value })}
               className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
               {(provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map(m => (
@@ -227,7 +230,7 @@ function AITab() {
             <Label className="text-xs">Insights Model</Label>
             <select
               value={modelInsights}
-              onChange={e => setModelInsights(e.target.value)}
+              onChange={e => update({ ai_model_insights: e.target.value })}
               className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
               {(provider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map(m => (
@@ -241,67 +244,73 @@ function AITab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">API Keys</CardTitle>
-          <CardDescription>Keys are stored server-side in your .env — enter here to update</CardDescription>
+          <CardDescription>Keys are stored server-side — enter here to update them</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Anthropic */}
           <div className="space-y-1.5">
-            <Label className="text-xs font-mono">ANTHROPIC_API_KEY</Label>
+            <Label className="text-xs font-mono flex items-center gap-2">
+              ANTHROPIC_API_KEY
+              {prefs?.anthropic_api_key_set && (
+                <span className="text-green-500 font-sans font-normal flex items-center gap-0.5">
+                  <CheckCircle2 className="w-3 h-3" /> Set
+                </span>
+              )}
+            </Label>
             <div className="relative">
               <Input
                 type={showAnthropicKey ? 'text' : 'password'}
-                placeholder="sk-ant-…"
+                placeholder={prefs?.anthropic_api_key_set ? 'Leave blank to keep current key' : 'sk-ant-…'}
                 value={anthropicKey}
                 onChange={e => setAnthropicKey(e.target.value)}
                 className="pr-8 font-mono text-xs"
               />
-              <button
-                type="button"
-                onClick={() => setShowAnthropicKey(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
+              <button type="button" onClick={() => setShowAnthropicKey(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 {showAnthropicKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
 
-          {/* OpenAI */}
           <div className="space-y-1.5">
-            <Label className="text-xs font-mono">OPENAI_API_KEY</Label>
+            <Label className="text-xs font-mono flex items-center gap-2">
+              OPENAI_API_KEY
+              {prefs?.openai_api_key_set && (
+                <span className="text-green-500 font-sans font-normal flex items-center gap-0.5">
+                  <CheckCircle2 className="w-3 h-3" /> Set
+                </span>
+              )}
+            </Label>
             <div className="relative">
               <Input
                 type={showOpenaiKey ? 'text' : 'password'}
-                placeholder="sk-…"
+                placeholder={prefs?.openai_api_key_set ? 'Leave blank to keep current key' : 'sk-…'}
                 value={openaiKey}
                 onChange={e => setOpenaiKey(e.target.value)}
                 className="pr-8 font-mono text-xs"
               />
-              <button
-                type="button"
-                onClick={() => setShowOpenaiKey(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
+              <button type="button" onClick={() => setShowOpenaiKey(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                 {showOpenaiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
-
-          <p className="text-xs text-muted-foreground">Leave blank to keep the existing key. Keys are stored in your server .env and never sent to the browser after saving.</p>
         </CardContent>
       </Card>
 
-      {/* Save */}
+      {/* Keys require explicit save (they're sensitive — no auto-save) */}
       <div className="flex items-center gap-3">
-        <Button onClick={handleSave} disabled={saving} size="sm">
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          Save AI Settings
+        <Button
+          onClick={handleSaveKeys}
+          disabled={keySaving || (!anthropicKey.trim() && !openaiKey.trim())}
+          size="sm"
+        >
+          {keySaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save API Keys
         </Button>
-        {saveMsg && (
-          <p className={`text-xs flex items-center gap-1 ${saveMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
-            {saveMsg.type === 'success'
-              ? <CheckCircle2 className="w-3.5 h-3.5" />
-              : <AlertCircle className="w-3.5 h-3.5" />}
-            {saveMsg.text}
+        {keyMsg && (
+          <p className={`text-xs flex items-center gap-1 ${keyMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+            {keyMsg.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+            {keyMsg.text}
           </p>
         )}
       </div>
@@ -310,34 +319,87 @@ function AITab() {
 }
 
 function IOSTab() {
+  const [copied, setCopied] = useState(false)
+
+  // Derive the backend URL from the current page's hostname (same Mac, port 8000)
+  const backendHost = typeof window !== 'undefined'
+    ? `${window.location.hostname}:8000`
+    : 'YOUR_MAC_IP:8000'
+  const endpointUrl = `http://${backendHost}/api/ios/transaction`
+
+  const exampleBody = JSON.stringify({
+    merchant: "Starbucks",
+    amount: 6.75,
+    date: new Date().toISOString().split('T')[0],
+    payment_method: "Apple Pay",
+  }, null, 2)
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">iOS Shortcut Integration</CardTitle>
-          <CardDescription>Log transactions instantly from your iPhone using an iOS Shortcut</CardDescription>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Smartphone className="w-4 h-4" /> iOS Shortcut Integration
+          </CardTitle>
+          <CardDescription>Log transactions instantly from your iPhone without opening the app</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="rounded-lg bg-muted p-4">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Endpoint URL</p>
-            <code className="text-sm font-mono break-all">http://YOUR_MAC_IP:8000/api/ios/transaction</code>
-          </div>
-          <div className="rounded-lg bg-muted p-4">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Required Fields</p>
-            <div className="space-y-1">
-              {['merchant (string)', 'amount (number)', 'date (YYYY-MM-DD)', 'payment_method (string, optional)'].map((f) => (
-                <p key={f} className="text-xs font-mono text-muted-foreground">{f}</p>
-              ))}
+          {/* Endpoint */}
+          <div className="rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">POST Endpoint</p>
+            <div className="flex items-center gap-2">
+              <code className="text-xs font-mono flex-1 break-all text-foreground">{endpointUrl}</code>
+              <button
+                onClick={() => handleCopy(endpointUrl)}
+                className="flex-shrink-0 p-1.5 rounded hover:bg-background transition-colors"
+                title="Copy URL"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-muted-foreground" />}
+              </button>
             </div>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Transactions logged via iOS arrive with <Badge variant="outline" className="text-xs">needs_review</Badge> status
-            so you can categorize them on next import.
-          </p>
-          <Button variant="outline" size="sm" className="w-full">
-            <Smartphone className="w-4 h-4" />
-            Download iOS Shortcut Template
-          </Button>
+
+          {/* Fields */}
+          <div className="rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">JSON Body</p>
+            <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{exampleBody}</pre>
+          </div>
+
+          {/* Notes */}
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p className="flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+              No authentication required — the endpoint is local-network only
+            </p>
+            <p className="flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+              Duplicate detection: same merchant + amount + date is silently skipped
+            </p>
+            <p className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              Arrives as <Badge variant="outline" className="text-xs">needs_review</Badge> — categorize it in Transactions
+            </p>
+          </div>
+
+          {/* Shortcut setup guide */}
+          <div className="rounded-lg border p-3 space-y-2">
+            <p className="text-xs font-semibold">Quick setup in iOS Shortcuts:</p>
+            <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+              <li>Open the Shortcuts app → New Shortcut</li>
+              <li>Add action: <strong>Get Contents of URL</strong></li>
+              <li>Set Method to <strong>POST</strong>, URL to the endpoint above</li>
+              <li>Headers: <code>Content-Type: application/json</code></li>
+              <li>Body: JSON with merchant, amount, and date fields</li>
+              <li>Add to Home Screen or set as Apple Pay trigger</li>
+            </ol>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -379,57 +441,206 @@ function AppearanceTab() {
   )
 }
 
+interface BackupEntry {
+  id: string
+  backup_path: string
+  size_bytes: number | null
+  triggered_by: string | null
+  status: string
+  created_at: string
+}
+
 function BackupTab() {
+  const [backingUp, setBackingUp] = useState(false)
+  const [backupMsg, setBackupMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [history, setHistory] = useState<BackupEntry[]>([])
+  const [histLoading, setHistLoading] = useState(true)
+  const [exporting, setExporting] = useState<string | null>(null)
+
+  const loadHistory = useCallback(async () => {
+    setHistLoading(true)
+    try {
+      const res = await api.get('/backup/history')
+      setHistory(res.data)
+    } catch { /* ignore */ } finally {
+      setHistLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadHistory() }, [loadHistory])
+
+  const handleBackup = async () => {
+    setBackingUp(true)
+    setBackupMsg(null)
+    try {
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch(`${api.defaults.baseURL}/backup/trigger`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const blob = await res.blob()
+      const cd = res.headers.get('content-disposition') || ''
+      const match = cd.match(/filename="?([^"]+)"?/)
+      const fname = match ? match[1] : 'finance_backup.json.gz'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = fname; a.click()
+      URL.revokeObjectURL(url)
+      setBackupMsg({ type: 'success', text: `Backup downloaded: ${fname}` })
+      loadHistory()
+    } catch (e: unknown) {
+      setBackupMsg({ type: 'error', text: (e as Error).message || 'Backup failed' })
+    } finally {
+      setBackingUp(false)
+    }
+  }
+
+  const handleExport = async (format: 'csv' | 'json' | 'excel') => {
+    setExporting(format)
+    const paths: Record<string, [string, string]> = {
+      csv:   ['/export/csv',   'text/csv'],
+      json:  ['/export/json',  'application/json'],
+      excel: ['/export/excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    }
+    const [path, mime] = paths[format]
+    try {
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch(`${api.defaults.baseURL}${path}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+      const blob = await res.blob()
+      const cd = res.headers.get('content-disposition') || ''
+      const match = cd.match(/filename="?([^"]+)"?/)
+      const fname = match ? match[1] : `export.${format}`
+      const url = URL.createObjectURL(new Blob([blob], { type: mime }))
+      const a = document.createElement('a')
+      a.href = url; a.download = fname; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: unknown) {
+      console.error('Export error:', e)
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const fmtBytes = (b: number | null) => {
+    if (!b) return '—'
+    if (b < 1024) return `${b} B`
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`
+  }
+  const fmtDate = (iso: string) => new Date(iso).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+
   return (
     <div className="space-y-4">
+      {/* Manual Backup */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Automatic Backups</CardTitle>
-          <CardDescription>PostgreSQL pg_dump backups, compressed and stored locally</CardDescription>
+          <CardTitle className="text-base flex items-center gap-2">
+            <HardDrive className="w-4 h-4" /> Backup
+          </CardTitle>
+          <CardDescription>
+            Creates a compressed JSON snapshot of all your financial data and downloads it to your browser.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-sm font-medium">Auto-backup on changes</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">Triggered after changes, with 30-minute debounce</p>
-            </div>
-            <Switch defaultChecked />
-          </div>
-          <Separator />
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-sm font-medium">Monthly backup</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">Full backup on the 1st of each month</p>
-            </div>
-            <Switch defaultChecked />
-          </div>
-          <Separator />
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-sm font-medium">Backup location</Label>
-              <p className="text-xs text-muted-foreground mt-0.5 font-mono">~/Finance/Backups/</p>
-            </div>
-            <Button size="sm" variant="ghost" className="text-xs">Change</Button>
-          </div>
-          <Button className="w-full" variant="outline" size="sm">
-            <Database className="w-4 h-4" />
-            Trigger Manual Backup
+        <CardContent className="space-y-3">
+          <Button onClick={handleBackup} disabled={backingUp} className="w-full" variant="outline">
+            {backingUp
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating backup…</>
+              : <><Database className="w-4 h-4" /> Download Backup Now</>}
           </Button>
+          {backupMsg && (
+            <p className={`text-xs flex items-center gap-1 ${backupMsg.type === 'success' ? 'text-green-600' : 'text-destructive'}`}>
+              {backupMsg.type === 'success'
+                ? <CheckCircle2 className="w-3.5 h-3.5" />
+                : <AlertCircle className="w-3.5 h-3.5" />}
+              {backupMsg.text}
+            </p>
+          )}
         </CardContent>
       </Card>
 
+      {/* Export Data */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Export Data</CardTitle>
-          <CardDescription>Download your data in various formats</CardDescription>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Download className="w-4 h-4" /> Export Data
+          </CardTitle>
+          <CardDescription>Download all transactions in your preferred format</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {['CSV — Transactions', 'PDF — Monthly Summary', 'JSON — Full Export', 'Excel — Formatted Workbook'].map((fmt) => (
-            <Button key={fmt} variant="outline" size="sm" className="w-full justify-between">
-              <span className="text-sm">{fmt}</span>
-              <Download className="w-4 h-4" />
+          {([
+            { format: 'csv'   as const, label: 'CSV — Transactions spreadsheet',    icon: FileText,        color: 'text-green-600' },
+            { format: 'excel' as const, label: 'Excel — Multi-sheet workbook',       icon: FileSpreadsheet, color: 'text-emerald-600' },
+            { format: 'json'  as const, label: 'JSON — Full data export',            icon: FileJson,        color: 'text-blue-600' },
+          ]).map(({ format, label, icon: Icon, color }) => (
+            <Button
+              key={format}
+              variant="outline"
+              size="sm"
+              className="w-full justify-between"
+              disabled={exporting === format}
+              onClick={() => handleExport(format)}
+            >
+              <span className="flex items-center gap-2">
+                <Icon className={`w-4 h-4 ${color}`} />
+                <span className="text-sm">{label}</span>
+              </span>
+              {exporting === format
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Download className="w-4 h-4 text-muted-foreground" />}
             </Button>
           ))}
+        </CardContent>
+      </Card>
+
+      {/* Backup History */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Clock className="w-4 h-4" /> Backup History
+              </CardTitle>
+              <CardDescription>Last 30 backup events</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={loadHistory} disabled={histLoading}>
+              <RefreshCw className={`w-3.5 h-3.5 ${histLoading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {histLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-6">
+              <Database className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No backups yet — create your first one above</p>
+            </div>
+          ) : (
+            <div className="divide-y text-xs">
+              {history.map((b) => (
+                <div key={b.id} className="flex items-center justify-between py-2 gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {b.status === 'success'
+                      ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                      : <AlertCircle  className="w-3.5 h-3.5 text-destructive flex-shrink-0" />}
+                    <span className="text-muted-foreground">{fmtDate(b.created_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-muted-foreground flex-shrink-0">
+                    <span>{fmtBytes(b.size_bytes)}</span>
+                    <Badge variant="outline" className="text-xs capitalize">{b.triggered_by ?? 'auto'}</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

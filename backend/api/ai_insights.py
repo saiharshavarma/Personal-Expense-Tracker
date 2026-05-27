@@ -56,7 +56,6 @@ async def query_insights(
     Phase 11: Natural language question answered using aggregated stats only.
     NEVER sends raw transactions or merchant names to AI.
     """
-    # Check opt-in
     result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
     prefs = result.scalar_one_or_none()
     if not prefs or not prefs.ai_insights_opt_in:
@@ -65,11 +64,21 @@ async def query_insights(
             detail="AI insights not enabled. Enable it in Settings → AI Configuration."
         )
 
-    # Phase 11 full implementation deferred — stub response for now
-    raise HTTPException(
-        status_code=501,
-        detail="AI insights full implementation coming in Phase 11."
-    )
+    ai_provider = await _get_ai_provider(db)
+    if not ai_provider:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI provider configured. Add an Anthropic or OpenAI API key in Settings."
+        )
+
+    from services.ai.insights import query_insights as _query
+    try:
+        data = await _query(body.question, db, ai_provider, month=body.month, year=body.year)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI query failed: {e}")
 
 
 @router.post("/categorize")

@@ -155,5 +155,11 @@ async def update_reimbursement_status(
     if status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
     t.reimbursement_status = status
+    # When marked paid, record the received amount if not already set
+    if status == "paid" and not t.received_reimbursement:
+        t.received_reimbursement = t.expected_reimbursement or t.amount
+    # When moved back out of paid, clear the received amount
+    elif status != "paid" and status != "partial":
+        t.received_reimbursement = None
     await db.commit()
     return {"id": str(t.id), "reimbursement_status": status}

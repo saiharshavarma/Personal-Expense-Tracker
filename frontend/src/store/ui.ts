@@ -11,12 +11,16 @@ interface UIStore {
   theme: 'light' | 'dark'
   sidebarCollapsed: boolean
   notifications: Notification[]
+  // Badge counts shown in the sidebar
+  needsReviewCount: number
+  importQueueCount: number
 
   toggleTheme: () => void
   setTheme: (theme: 'light' | 'dark') => void
   toggleSidebar: () => void
   addNotification: (n: Omit<Notification, 'id'>) => void
   removeNotification: (id: string) => void
+  setBadgeCounts: (counts: { needsReviewCount?: number; importQueueCount?: number }) => void
 }
 
 function getStoredTheme(): 'light' | 'dark' {
@@ -39,6 +43,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
   theme: getStoredTheme(),
   sidebarCollapsed: false,
   notifications: [],
+  needsReviewCount: 0,
+  importQueueCount: 0,
 
   toggleTheme: () => {
     const next = get().theme === 'light' ? 'dark' : 'light'
@@ -61,6 +67,11 @@ export const useUIStore = create<UIStore>((set, get) => ({
 
   removeNotification: (id) =>
     set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
+
+  setBadgeCounts: (counts) => set((s) => ({
+    needsReviewCount: counts.needsReviewCount ?? s.needsReviewCount,
+    importQueueCount: counts.importQueueCount ?? s.importQueueCount,
+  })),
 }))
 
 // Apply theme on module load

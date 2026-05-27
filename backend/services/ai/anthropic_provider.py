@@ -3,56 +3,62 @@ from typing import List
 
 from services.ai.provider import AIProvider, AICategorizationResult, AIInsightResult
 
-CATEGORIES = [
-    "Food & Dining", "Groceries", "Transportation", "Gas & Fuel",
-    "Shopping", "Entertainment", "Health & Medical", "Utilities",
-    "Housing & Rent", "Insurance", "Travel", "Subscriptions & Software",
-    "Education", "Personal Care", "Business & Work", "Investments",
-    "Income", "Transfers", "Fees & Charges", "Other",
-]
+# ── Canonical taxonomy — must stay in sync with frontend/src/lib/categories.ts ──
+# These are the ONLY valid category/subcategory values.  The AI must pick from
+# exactly this list so stored values always match what the UI renders.
 
-SUBCATEGORY_MAP = {
-    "Food & Dining": ["Restaurants", "Fast Food", "Coffee Shops", "Bars & Nightlife", "Food Delivery"],
-    "Groceries": ["Supermarket", "Wholesale Club", "Specialty Food"],
-    "Transportation": ["Rideshare", "Parking", "Public Transit", "Taxi", "Car Rental"],
-    "Gas & Fuel": ["Gas Station", "EV Charging"],
-    "Shopping": ["Clothing", "Electronics", "Home & Garden", "Online Shopping", "Department Store"],
-    "Entertainment": ["Movies & Streaming", "Music", "Games", "Sports & Recreation", "Arts & Culture"],
-    "Health & Medical": ["Doctor", "Pharmacy", "Dental", "Vision", "Fitness & Gym"],
-    "Utilities": ["Electricity", "Water", "Internet", "Phone", "Gas"],
-    "Housing & Rent": ["Rent", "Mortgage", "Home Maintenance", "Furniture"],
-    "Insurance": ["Health Insurance", "Auto Insurance", "Life Insurance", "Home Insurance"],
-    "Travel": ["Flights", "Hotels", "Vacation Rentals", "Travel Activities"],
-    "Subscriptions & Software": ["Streaming", "Software", "Membership", "News & Media"],
-    "Education": ["Tuition", "Books & Supplies", "Online Courses", "Tutoring"],
-    "Personal Care": ["Haircut", "Spa & Beauty", "Clothing Care"],
-    "Business & Work": ["Office Supplies", "Business Travel", "Professional Services"],
-    "Investments": ["Stocks", "Crypto", "Real Estate", "Retirement"],
-    "Income": ["Salary", "Freelance", "Interest", "Dividend", "Refund"],
-    "Transfers": ["Bank Transfer", "P2P Payment", "Savings Transfer"],
-    "Fees & Charges": ["Bank Fee", "Late Fee", "ATM Fee", "Service Charge"],
-    "Other": ["Miscellaneous"],
+CATEGORY_MAP = {
+    "Food & Dining":    ["Groceries", "Restaurants", "Fast Food", "Coffee & Tea", "Food Delivery", "Alcohol & Bars", "Specialty Food"],
+    "Transportation":   ["Gas & Fuel", "Parking", "Rideshare / Taxi", "Public Transit", "Car Rental", "Auto Maintenance", "Auto Insurance", "Car Wash", "Tolls"],
+    "Housing":          ["Rent / Mortgage", "Property Tax", "Home Insurance", "HOA Fees", "Furniture & Decor", "Home Improvement", "Cleaning & Maintenance", "Lawn & Garden"],
+    "Utilities":        ["Electricity", "Gas / Heat", "Water", "Trash & Recycling", "Internet", "Mobile Phone", "Cable / Satellite"],
+    "Entertainment":    ["Movies & Concerts", "Sports & Recreation", "Video Games", "Hobbies", "Books & Magazines", "Amusement Parks", "Night Out"],
+    "Shopping":         ["Clothing & Apparel", "Electronics", "Home Goods", "Beauty & Personal Care", "Baby & Kids", "Gifts", "Online Shopping"],
+    "Health & Medical": ["Doctor Visit", "Dentist", "Pharmacy", "Gym & Fitness", "Mental Health", "Eye Care", "Health Insurance", "Vitamins & Supplements"],
+    "Travel":           ["Airfare", "Hotels & Lodging", "Vacation Rentals", "Car Rental", "Cruise", "Travel Insurance", "Baggage & Fees"],
+    "Business & Work":  ["Office Supplies", "Software & SaaS", "Professional Services", "Business Travel", "Client Entertainment", "Conferences & Events", "Coworking"],
+    "Education":        ["Tuition", "Books & Supplies", "Online Courses", "Tutoring", "School Fees"],
+    "Subscriptions":    ["Streaming Video", "Streaming Music", "News & Media", "Cloud Storage", "Productivity Tools", "Security & VPN", "Other Subscription"],
+    "Financial":        ["Bank Fees", "Interest Charges", "Life Insurance", "Investment Purchase", "Savings Transfer", "Taxes", "Loan Payment"],
+    "Personal":         ["Donations & Charity", "Gifts Given", "Pet Care", "Child Care", "Haircut & Grooming", "Lottery / Gambling"],
+    "Income":           ["Salary / Paycheck", "Freelance", "Investment Returns", "Refund", "Reimbursement Received", "Rental Income", "Other Income"],
+    "Transfer":         ["Bank Transfer", "Credit Card Payment", "Peer Payment (Venmo etc)", "Internal Transfer"],
+    "Other":            ["Miscellaneous", "Unknown"],
 }
 
-SYSTEM_PROMPT = """You are a personal finance transaction categorizer. You will receive a JSON array of transactions with sanitized fields only (no account info, no full names).
+CATEGORIES = list(CATEGORY_MAP.keys())  # kept for OpenAI provider compat
+
+# Build a readable taxonomy block for the system prompt
+def _taxonomy_block() -> str:
+    lines = ["Category → valid subcategories:"]
+    for cat, subs in CATEGORY_MAP.items():
+        lines.append(f'  "{cat}": {[s for s in subs]}')
+    return "\n".join(lines)
+
+SYSTEM_PROMPT = f"""You are a personal finance transaction categorizer. You will receive a JSON array of transactions with sanitized fields only (no account info, no full names).
 
 For each transaction, return a JSON array with the same number of elements in the same order. Each element must have:
 - "id": the transaction id (copy from input)
-- "category": one of the provided categories
-- "subcategory": a relevant subcategory
-- "merchant_clean": a clean, normalized merchant name (e.g. "Starbucks" not "STARBUCKS #1234 CARD 4321")
+- "category": exactly one of the category names below
+- "subcategory": exactly one of the valid subcategories for that category (see taxonomy — NEVER use a value not listed)
+- "merchant_clean": a clean, normalized merchant name (e.g. "Netflix" not "NETFLIX.COM")
 - "need_want_savings": "need", "want", or "savings"
 - "confidence": float 0.0-1.0 (your confidence in this categorization)
-- "flags": array of strings, any of: ["recurring", "reimbursable", "work_expense", "large_amount", "unusual"]
+- "flags": array of zero or more strings from: ["recurring", "reimbursable", "work_expense", "large_amount", "unusual"]
 
-Rules:
-- needs = rent, groceries, utilities, health, insurance, transportation to work
-- wants = dining out, entertainment, shopping, subscriptions, travel
-- savings = investments, savings transfers, retirement contributions
-- Be conservative with confidence. Use <0.75 if description is ambiguous.
-- Use "needs_review" flag if the transaction is unusual or ambiguous.
+Taxonomy (you MUST pick category AND subcategory from these exact strings):
+{_taxonomy_block()}
 
-Respond with ONLY valid JSON, no markdown, no explanation."""
+Classification rules:
+- need = rent, groceries, utilities, health, insurance, commuting
+- want = dining out, entertainment, shopping, subscriptions, travel, personal care
+- savings = investments, savings transfers, retirement
+- Be conservative with confidence — use <0.75 if the description is ambiguous.
+- Netflix/Spotify/Hulu → Subscriptions / Streaming Video
+- Amazon/eBay/Walmart → Shopping / Online Shopping (unless clearly food/pharmacy)
+- Uber/Lyft → Transportation / Rideshare / Taxi
+
+Respond with ONLY a valid JSON array, no markdown, no explanation."""
 
 
 class AnthropicProvider(AIProvider):

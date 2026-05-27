@@ -42,7 +42,9 @@ export const useTransactionsStore = create<TransactionsStore>((set, get) => ({
   filters: defaultFilters,
 
   fetchTransactions: async (overrideFilters) => {
-    const filters = { ...get().filters, ...overrideFilters }
+    // When an explicit filter set is passed, use it as-is (replace, not merge).
+    // This is the only way chip-X removal and filter-panel Apply can clear filters.
+    const filters = overrideFilters ?? get().filters
     set({ isLoading: true, error: null })
     try {
       const params = Object.fromEntries(
@@ -55,7 +57,7 @@ export const useTransactionsStore = create<TransactionsStore>((set, get) => ({
         page: data.page,
         pages: data.pages,
         isLoading: false,
-        filters: { ...filters, ...overrideFilters },
+        filters,
       })
     } catch {
       set({ isLoading: false, error: 'Failed to load transactions' })

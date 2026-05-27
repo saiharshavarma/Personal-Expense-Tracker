@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -8,24 +9,72 @@ import {
 import { cn } from '@/lib/utils'
 import { useUIStore, useAuthStore } from '@/store'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
+import { api } from '@/utils/apiClient'
 
-const navItems = [
-  { icon: LayoutDashboard, label: 'Dashboard', to: '/' },
-  { icon: ArrowLeftRight, label: 'Transactions', to: '/transactions' },
-  { icon: Upload, label: 'Import', to: '/import' },
-  { icon: BarChart3, label: 'Analytics', to: '/analytics' },
-  { icon: Target, label: 'Budget', to: '/budget' },
-  { icon: Receipt, label: 'Reimbursements', to: '/reimbursements' },
-  { icon: RefreshCw, label: 'Subscriptions', to: '/subscriptions' },
-  { icon: Plane, label: 'Trips', to: '/trips' },
-  { icon: MessageSquare, label: 'Ask AI', to: '/ask-ai' },
-  { icon: Settings, label: 'Settings', to: '/settings' },
-]
+// Fetch badge counts every 60 s while the app is open
+const BADGE_POLL_MS = 60_000
+
+async function fetchBadgeCounts(setBadgeCounts: (c: { needsReviewCount?: number; importQueueCount?: number }) => void) {
+  try {
+    const [reviewRes, queueRes] = await Promise.allSettled([
+      api.get('/transactions', { params: { needs_review: 'true', page_size: 1, page: 1 } }),
+      api.get('/import/review-queue'),
+    ])
+    const needsReviewCount =
+      reviewRes.status === 'fulfilled' ? (reviewRes.value.data.total ?? 0) : undefined
+    const importQueueCount =
+      queueRes.status === 'fulfilled' ? (queueRes.value.data.length ?? 0) : undefined
+    setBadgeCounts({ needsReviewCount, importQueueCount })
+  } catch { /* ignore */ }
+}
+
+// Badge pill rendered inside a nav item
+function NavBadge({ count }: { count: number }) {
+  if (count === 0) return null
+  return (
+    <span className="ml-auto flex-shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
+interface NavItem {
+  icon: React.ElementType
+  label: string
+  to: string
+  badge?: number
+}
 
 export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar, theme, toggleTheme } = useUIStore()
+  const { sidebarCollapsed, toggleSidebar, theme, toggleTheme, needsReviewCount, importQueueCount, setBadgeCounts } = useUIStore()
   const { logout } = useAuthStore()
   const location = useLocation()
+
+  // Fetch on mount and on a polling interval
+  useEffect(() => {
+    fetchBadgeCounts(setBadgeCounts)
+    const id = setInterval(() => fetchBadgeCounts(setBadgeCounts), BADGE_POLL_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  // Re-fetch when navigating away from Import or Transactions pages
+  // so the badges update without waiting for the next poll
+  useEffect(() => {
+    fetchBadgeCounts(setBadgeCounts)
+  }, [location.pathname])
+
+  const navItems: NavItem[] = [
+    { icon: LayoutDashboard, label: 'Dashboard',      to: '/' },
+    { icon: ArrowLeftRight,  label: 'Transactions',   to: '/transactions', badge: needsReviewCount },
+    { icon: Upload,          label: 'Import',         to: '/import',       badge: importQueueCount },
+    { icon: BarChart3,       label: 'Analytics',      to: '/analytics' },
+    { icon: Target,          label: 'Budget',         to: '/budget' },
+    { icon: Receipt,         label: 'Reimbursements', to: '/reimbursements' },
+    { icon: RefreshCw,       label: 'Subscriptions',  to: '/subscriptions' },
+    { icon: Plane,           label: 'Trips',          to: '/trips' },
+    { icon: MessageSquare,   label: 'Ask AI',         to: '/ask-ai' },
+    { icon: Settings,        label: 'Settings',       to: '/settings' },
+  ]
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -64,7 +113,7 @@ export function Sidebar() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-          {navItems.map(({ icon: Icon, label, to }) => {
+          {navItems.map(({ icon: Icon, label, to, badge }) => {
             const isActive = to === '/'
               ? location.pathname === '/'
               : location.pathname.startsWith(to)
@@ -81,19 +130,31 @@ export function Sidebar() {
                   sidebarCollapsed && 'justify-center px-2'
                 )}
               >
-                <Icon className={cn('w-4 h-4 flex-shrink-0', isActive && 'text-primary-foreground')} />
+                {/* Icon — show a dot when collapsed and badge > 0 */}
+                <span className="relative flex-shrink-0">
+                  <Icon className={cn('w-4 h-4', isActive && 'text-primary-foreground')} />
+                  {sidebarCollapsed && badge != null && badge > 0 && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500" />
+                  )}
+                </span>
+
                 <AnimatePresence>
                   {!sidebarCollapsed && (
                     <motion.span
                       initial={{ opacity: 0, width: 0 }}
                       animate={{ opacity: 1, width: 'auto' }}
                       exit={{ opacity: 0, width: 0 }}
-                      className="truncate"
+                      className="truncate flex-1"
                     >
                       {label}
                     </motion.span>
                   )}
                 </AnimatePresence>
+
+                {/* Badge pill — only when sidebar is expanded */}
+                {!sidebarCollapsed && badge != null && (
+                  <NavBadge count={badge} />
+                )}
               </NavLink>
             )
 
@@ -101,7 +162,9 @@ export function Sidebar() {
               return (
                 <Tooltip key={to}>
                   <TooltipTrigger asChild>{linkEl}</TooltipTrigger>
-                  <TooltipContent side="right">{label}</TooltipContent>
+                  <TooltipContent side="right">
+                    {label}{badge != null && badge > 0 ? ` (${badge})` : ''}
+                  </TooltipContent>
                 </Tooltip>
               )
             }

@@ -99,7 +99,13 @@ async def savings_rate(
 ):
     data = await income_expenses(months=months, _user=None, db=db)
     return [
-        {**d, "savings_rate": round((d["income"] - d["expenses"]) / d["income"] * 100, 1) if d["income"] else 0}
+        {
+            **d,
+            # savings_rate is null when income=0 so the frontend can show a fallback
+            "savings_rate": round((d["income"] - d["expenses"]) / d["income"] * 100, 1) if d["income"] else None,
+            # savings_amount (income − expenses) is always available; negative means spending exceeds income
+            "savings_amount": round(d["income"] - d["expenses"], 2),
+        }
         for d in data
     ]
 
@@ -176,3 +182,131 @@ async def top_merchants(
         q = q.where(extract("month", Transaction.date) == month, extract("year", Transaction.date) == year)
     result = await db.execute(q.group_by(Transaction.merchant).order_by(func.sum(Transaction.amount).desc()).limit(limit))
     return [{"merchant": r.merchant, "total": float(r.total or 0), "visits": r.visits} for r in result.all()]
+
+
+@router.get("/need-want-savings")
+async def need_want_savings_split(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(
+        Transaction.need_want_savings,
+        func.sum(Transaction.amount).label("total"),
+        func.count(Transaction.id).label("count"),
+    ).where(Transaction.direction == "debit", Transaction.need_want_savings.isnot(None))
+    if month and year:
+        q = q.where(extract("month", Transaction.date) == month, extract("year", Transaction.date) == year)
+    result = await db.execute(q.group_by(Transaction.need_want_savings))
+    rows = result.all()
+    total = sum(float(r.total or 0) for r in rows)
+    return [
+        {"type": r.need_want_savings, "total": float(r.total or 0), "count": r.count,
+         "pct": round(float(r.total or 0) / total * 100, 1) if total else 0}
+        for r in rows
+    ]
+
+
+@router.get("/recurring-split")
+async def recurring_split(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(
+        Transaction.is_recurring,
+        func.sum(Transaction.amount).label("total"),
+        func.count(Transaction.id).label("count"),
+    ).where(Transaction.direction == "debit")
+    if month and year:
+        q = q.where(extract("month", Transaction.date) == month, extract("year", Transaction.date) == year)
+    result = await db.execute(q.group_by(Transaction.is_recurring))
+    rows = result.all()
+    total = sum(float(r.total or 0) for r in rows)
+    return [
+        {"type": "recurring" if r.is_recurring else "one_time",
+         "total": float(r.total or 0), "count": r.count,
+         "pct": round(float(r.total or 0) / total * 100, 1) if total else 0}
+        for r in rows
+    ]
+
+
+@router.get("/dashboard-summary")
+async def dashboard_summary(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    today = date.today()
+    m = month or today.month
+    y = year or today.year
+    prev_m = m - 1 if m > 1 else 12
+    prev_y = y if m > 1 else y - 1
+
+    # Income + expenses for selected period
+    period_rows = (await db.execute(
+        select(Transaction.direction, func.sum(Transaction.amount).label("total"),
+               func.count(Transaction.id).label("count"))
+        .where(extract("month", Transaction.date) == m, extract("year", Transaction.date) == y)
+        .group_by(Transaction.direction)
+    )).all()
+    income = 0.0; expenses = 0.0; txn_count = 0
+    for r in period_rows:
+        if r.direction == "credit": income = float(r.total or 0)
+        else: expenses = float(r.total or 0); txn_count = r.count
+
+    # Previous month expenses
+    prev_exp = float((await db.execute(
+        select(func.sum(Transaction.amount).label("t"))
+        .where(Transaction.direction == "debit",
+               extract("month", Transaction.date) == prev_m, extract("year", Transaction.date) == prev_y)
+    )).scalar() or 0)
+    mom_pct = round((expenses - prev_exp) / prev_exp * 100, 1) if prev_exp else 0
+
+    # Top category
+    top_cat_row = (await db.execute(
+        select(Transaction.category, func.sum(Transaction.amount).label("total"))
+        .where(Transaction.direction == "debit", Transaction.category.isnot(None),
+               extract("month", Transaction.date) == m, extract("year", Transaction.date) == y)
+        .group_by(Transaction.category).order_by(func.sum(Transaction.amount).desc()).limit(1)
+    )).first()
+
+    # Pending reimbursements
+    reimb_row = (await db.execute(
+        select(func.sum(Transaction.expected_reimbursement).label("total"),
+               func.count(Transaction.id).label("count"))
+        .where(Transaction.is_reimbursable == True,
+               Transaction.reimbursement_status.in_(["to_submit", "submitted"]))
+    )).first()
+
+    # Recurring this month
+    recurring = float((await db.execute(
+        select(func.sum(Transaction.amount).label("t"))
+        .where(Transaction.direction == "debit", Transaction.is_recurring == True,
+               extract("month", Transaction.date) == m, extract("year", Transaction.date) == y)
+    )).scalar() or 0)
+
+    # Needs-review count
+    review_count = (await db.execute(
+        select(func.count(Transaction.id)).where(Transaction.needs_review == True)
+    )).scalar() or 0
+
+    return {
+        "month": m, "year": y,
+        "expenses": round(expenses, 2),
+        "income": round(income, 2),
+        "savings": round(income - expenses, 2),
+        "savings_rate": round((income - expenses) / income * 100, 1) if income else 0,
+        "transaction_count": txn_count,
+        "top_category": top_cat_row.category if top_cat_row else None,
+        "top_category_total": round(float(top_cat_row.total or 0), 2) if top_cat_row else 0,
+        "mom_change_pct": mom_pct,
+        "prev_month_expenses": round(prev_exp, 2),
+        "reimbursement_pending": round(float(reimb_row.total or 0), 2) if reimb_row else 0,
+        "reimbursement_count": reimb_row.count if reimb_row else 0,
+        "recurring_total": round(recurring, 2),
+        "needs_review_count": review_count,
+    }

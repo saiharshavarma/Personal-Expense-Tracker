@@ -1,23 +1,166 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RotateCcw } from 'lucide-react'
+import { RotateCcw, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
-import { Separator } from '@/components/ui/separator'
 import { useAccountsStore } from '@/store'
 import {
   ALL_CATEGORIES,
   getSubcategories,
-  NEED_WANT_SAVINGS_OPTIONS,
-  FIXED_VARIABLE_OPTIONS,
-  PERSONAL_WORK_OPTIONS,
-  REIMBURSEMENT_STATUS_OPTIONS,
-  TRANSACTION_SOURCE_OPTIONS,
 } from '@/lib/categories'
+import { cn } from '@/lib/utils'
 import type { TransactionFilters } from '@/types'
+
+// ── Utility: format date to YYYY-MM-DD ────────────────────────────────────────
+
+function fmt(d: Date) {
+  return d.toISOString().split('T')[0]
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1)
+}
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0)
+}
+function startOfYear(d: Date) {
+  return new Date(d.getFullYear(), 0, 1)
+}
+function subMonths(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth() - n, 1)
+}
+
+const DATE_PRESETS = [
+  {
+    label: 'This month',
+    range: () => {
+      const t = new Date()
+      return { date_from: fmt(startOfMonth(t)), date_to: fmt(t) }
+    },
+  },
+  {
+    label: 'Last month',
+    range: () => {
+      const t = new Date()
+      const prev = subMonths(t, 1)
+      return { date_from: fmt(startOfMonth(prev)), date_to: fmt(endOfMonth(prev)) }
+    },
+  },
+  {
+    label: 'Last 3M',
+    range: () => {
+      const t = new Date()
+      return { date_from: fmt(subMonths(t, 3)), date_to: fmt(t) }
+    },
+  },
+  {
+    label: 'This year',
+    range: () => {
+      const t = new Date()
+      return { date_from: fmt(startOfYear(t)), date_to: fmt(t) }
+    },
+  },
+]
+
+// ── Pill toggle group ──────────────────────────────────────────────────────────
+
+interface PillOption {
+  value: string
+  label: string
+}
+
+function PillGroup({
+  value,
+  options,
+  onChange,
+  allLabel = 'Any',
+}: {
+  value: string | undefined
+  options: PillOption[]
+  onChange: (v: string | undefined) => void
+  allLabel?: string
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={() => onChange(undefined)}
+        className={cn(
+          'px-3 py-1 rounded-full text-xs font-medium transition-all border',
+          !value
+            ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+            : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
+        )}
+      >
+        {allLabel}
+      </button>
+      {options.map((opt) => (
+        <button
+          type="button"
+          key={opt.value}
+          onClick={() => onChange(value === opt.value ? undefined : opt.value)}
+          className={cn(
+            'px-3 py-1 rounded-full text-xs font-medium transition-all border',
+            value === opt.value
+              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+              : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Toggle flag chip ───────────────────────────────────────────────────────────
+
+function FlagChip({
+  label,
+  active,
+  onToggle,
+}: {
+  label: string
+  active: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={cn(
+        'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
+        active
+          ? 'bg-primary/10 text-primary border-primary/30'
+          : 'bg-background text-muted-foreground border-border hover:border-primary/30 hover:text-foreground',
+      )}
+    >
+      <span
+        className={cn(
+          'w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-colors flex-shrink-0',
+          active ? 'bg-primary border-primary' : 'border-muted-foreground/40',
+        )}
+      >
+        {active && <Check className="w-2.5 h-2.5 text-primary-foreground" strokeWidth={3} />}
+      </span>
+      {label}
+    </button>
+  )
+}
+
+// ── Section label ──────────────────────────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-wider mb-2">
+      {children}
+    </p>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 interface FilterPanelProps {
   open: boolean
@@ -26,72 +169,40 @@ interface FilterPanelProps {
   onReset: () => void
 }
 
-function FilterSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">{title}</p>
-      {children}
-    </div>
-  )
-}
-
-function SelectFilter({
-  label,
-  value,
-  options,
-  onChange,
-  placeholder = 'Any',
-}: {
-  label: string
-  value: string | undefined
-  options: { value: string; label: string }[]
-  onChange: (v: string | undefined) => void
-  placeholder?: string
-}) {
-  return (
-    <div>
-      <Label className="text-xs">{label}</Label>
-      <Select
-        value={value ?? '__any'}
-        onValueChange={(v) => onChange(v === '__any' ? undefined : v)}
-      >
-        <SelectTrigger className="mt-1 h-8 text-xs">
-          <SelectValue placeholder={placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__any">{placeholder}</SelectItem>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-
 export function FilterPanel({ open, filters, onChange, onReset }: FilterPanelProps) {
   const { accounts } = useAccountsStore()
-  const [localFilters, setLocalFilters] = useState<TransactionFilters>(filters)
+  const [local, setLocal] = useState<TransactionFilters>(filters)
+  const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
 
   useEffect(() => {
-    if (open) setLocalFilters(filters)
+    if (open) {
+      setLocal(filters)
+      setActiveDatePreset(null)
+    }
   }, [open, filters])
 
   const set = (patch: Partial<TransactionFilters>) =>
-    setLocalFilters((f) => ({ ...f, ...patch }))
+    setLocal((f) => ({ ...f, ...patch }))
 
-  const apply = () => {
-    // Strip empty/undefined values before applying
-    const cleaned: Partial<TransactionFilters> = {}
-    for (const [k, v] of Object.entries(localFilters)) {
-      if (v !== undefined && v !== '' && v !== null) {
-        ;(cleaned as Record<string, unknown>)[k] = v
-      }
-    }
-    onChange(cleaned)
+  const applyPreset = (preset: (typeof DATE_PRESETS)[0]) => {
+    const range = preset.range()
+    setActiveDatePreset(preset.label)
+    set({ date_from: range.date_from, date_to: range.date_to })
   }
 
-  const subcats = getSubcategories(localFilters.category ?? '')
+  const apply = () => {
+    // Pass the full local state — including keys set to `undefined` (meaning "clear this filter").
+    // handleFilterChange strips undefined/null/'' after merging, so explicitly-cleared
+    // fields override any stale values in the current filter state.
+    onChange(local)
+  }
+
+  const subcats = getSubcategories(local.category ?? '')
+
+  const activeCount = Object.entries(local).filter(([k, v]) => {
+    if (['page', 'page_size', 'sort_by', 'sort_dir', 'search'].includes(k)) return false
+    return v !== undefined && v !== null && v !== ''
+  }).length
 
   return (
     <AnimatePresence>
@@ -100,200 +211,327 @@ export function FilterPanel({ open, filters, onChange, onReset }: FilterPanelPro
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: 0.18, ease: 'easeInOut' }}
           className="overflow-hidden"
         >
-          <div className="border rounded-xl bg-card p-5 mb-4 space-y-5">
-            {/* Date range */}
-            <FilterSection title="Date Range">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs">From</Label>
+          <div className="mb-4 rounded-2xl border bg-card/80 backdrop-blur-sm shadow-sm">
+
+            {/* ── Date row ── */}
+            <div className="px-5 pt-4 pb-3 border-b">
+              <SectionLabel>Date Range</SectionLabel>
+              <div className="flex items-center gap-2 flex-wrap">
+                {DATE_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => applyPreset(p)}
+                    className={cn(
+                      'px-3 py-1 rounded-full text-xs font-medium border transition-all',
+                      activeDatePreset === p.label
+                        ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                        : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+
+                <div className="flex items-center gap-1.5 ml-auto">
                   <Input
                     type="date"
-                    value={localFilters.date_from ?? ''}
-                    onChange={(e) => set({ date_from: e.target.value || undefined })}
-                    className="mt-1 h-8 text-xs"
+                    value={local.date_from ?? ''}
+                    onChange={(e) => { setActiveDatePreset(null); set({ date_from: e.target.value || undefined }) }}
+                    className="h-7 w-[130px] text-xs"
                   />
-                </div>
-                <div>
-                  <Label className="text-xs">To</Label>
+                  <span className="text-xs text-muted-foreground">to</span>
                   <Input
                     type="date"
-                    value={localFilters.date_to ?? ''}
-                    onChange={(e) => set({ date_to: e.target.value || undefined })}
-                    className="mt-1 h-8 text-xs"
+                    value={local.date_to ?? ''}
+                    onChange={(e) => { setActiveDatePreset(null); set({ date_to: e.target.value || undefined }) }}
+                    className="h-7 w-[130px] text-xs"
                   />
                 </div>
               </div>
-            </FilterSection>
-
-            <Separator />
-
-            {/* Amount + Account + Direction */}
-            <div className="grid grid-cols-2 gap-5">
-              <FilterSection title="Amount Range">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Min $</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={localFilters.min_amount ?? ''}
-                      onChange={(e) => set({ min_amount: e.target.value ? Number(e.target.value) : undefined } as Partial<TransactionFilters>)}
-                      className="mt-1 h-8 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Max $</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Any"
-                      value={localFilters.max_amount ?? ''}
-                      onChange={(e) => set({ max_amount: e.target.value ? Number(e.target.value) : undefined } as Partial<TransactionFilters>)}
-                      className="mt-1 h-8 text-xs"
-                    />
-                  </div>
-                </div>
-              </FilterSection>
-
-              <FilterSection title="Account & Direction">
-                <div className="space-y-2">
-                  <div>
-                    <Label className="text-xs">Account</Label>
-                    <Select
-                      value={localFilters.account_id ?? '__any'}
-                      onValueChange={(v) => set({ account_id: v === '__any' ? undefined : v })}
-                    >
-                      <SelectTrigger className="mt-1 h-8 text-xs">
-                        <SelectValue placeholder="Any account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__any">Any account</SelectItem>
-                        {accounts.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <SelectFilter
-                    label="Direction"
-                    value={localFilters.direction}
-                    options={[{ value: 'debit', label: 'Debit (expense)' }, { value: 'credit', label: 'Credit (income)' }]}
-                    onChange={(v) => set({ direction: v as TransactionFilters['direction'] })}
-                  />
-                </div>
-              </FilterSection>
             </div>
 
-            <Separator />
+            {/* ── Amount + Account + Direction ── */}
+            <div className="px-5 py-3 border-b grid grid-cols-3 gap-5">
+              {/* Account */}
+              <div>
+                <SectionLabel>Account</SectionLabel>
+                <Select
+                  value={local.account_id ?? '__any'}
+                  onValueChange={(v) => set({ account_id: v === '__any' ? undefined : v })}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Any account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__any">Any account</SelectItem>
+                    {accounts.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-            {/* Category */}
-            <FilterSection title="Category">
-              <div className="grid grid-cols-2 gap-3">
-                <SelectFilter
-                  label="Category"
-                  value={localFilters.category}
-                  options={ALL_CATEGORIES.map((c) => ({ value: c, label: c }))}
-                  onChange={(v) => { set({ category: v, subcategory: undefined }) }}
-                />
-                <SelectFilter
-                  label="Subcategory"
-                  value={localFilters.subcategory}
-                  options={subcats.map((s) => ({ value: s, label: s }))}
-                  onChange={(v) => set({ subcategory: v })}
-                  placeholder={!localFilters.category ? 'Pick category first' : 'Any'}
+              {/* Direction */}
+              <div>
+                <SectionLabel>Type</SectionLabel>
+                <PillGroup
+                  value={local.direction}
+                  options={[
+                    { value: 'debit', label: 'Debit' },
+                    { value: 'credit', label: 'Credit' },
+                  ]}
+                  onChange={(v) => set({ direction: v as TransactionFilters['direction'] })}
                 />
               </div>
-            </FilterSection>
 
-            <Separator />
+              {/* Amount range */}
+              <div>
+                <SectionLabel>Amount</SectionLabel>
+                <div className="flex items-center gap-1.5">
+                  <div className="relative flex-1">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">$</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Min"
+                      value={local.min_amount ?? ''}
+                      onChange={(e) => set({ min_amount: e.target.value ? Number(e.target.value) : undefined } as Partial<TransactionFilters>)}
+                      className="h-8 text-xs pl-6"
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground flex-shrink-0">—</span>
+                  <div className="relative flex-1">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">$</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Max"
+                      value={local.max_amount ?? ''}
+                      onChange={(e) => set({ max_amount: e.target.value ? Number(e.target.value) : undefined } as Partial<TransactionFilters>)}
+                      className="h-8 text-xs pl-6"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
 
-            {/* Classification */}
-            <FilterSection title="Classification">
-              <div className="grid grid-cols-3 gap-3">
-                <SelectFilter
-                  label="Need / Want / Savings"
-                  value={localFilters.need_want_savings}
-                  options={NEED_WANT_SAVINGS_OPTIONS}
+            {/* ── Category row ── */}
+            <div className="px-5 py-3 border-b">
+              <SectionLabel>Category</SectionLabel>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => set({ category: undefined, subcategory: undefined })}
+                  className={cn(
+                    'px-3 py-1 rounded-full text-xs font-medium border transition-all',
+                    !local.category
+                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                      : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
+                  )}
+                >
+                  All
+                </button>
+                {ALL_CATEGORIES.map((cat) => (
+                  <button
+                    type="button"
+                    key={cat}
+                    onClick={() => set({ category: local.category === cat ? undefined : cat, subcategory: undefined })}
+                    className={cn(
+                      'px-3 py-1 rounded-full text-xs font-medium border transition-all',
+                      local.category === cat
+                        ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                        : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
+                    )}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* Subcategory — only shown if category is selected */}
+              <AnimatePresence>
+                {local.category && subcats.length > 0 && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="mt-2 pt-2 border-t border-dashed">
+                      <Label className="text-[11px] text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
+                        Subcategory in {local.category}
+                      </Label>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => set({ subcategory: undefined })}
+                          className={cn(
+                            'px-2.5 py-0.5 rounded-full text-xs border transition-all',
+                            !local.subcategory
+                              ? 'bg-primary text-primary-foreground border-primary'
+                              : 'bg-background text-muted-foreground border-border hover:border-primary/40',
+                          )}
+                        >
+                          All
+                        </button>
+                        {subcats.map((s) => (
+                          <button
+                            type="button"
+                            key={s}
+                            onClick={() => set({ subcategory: local.subcategory === s ? undefined : s })}
+                            className={cn(
+                              'px-2.5 py-0.5 rounded-full text-xs border transition-all',
+                              local.subcategory === s
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'bg-background text-muted-foreground border-border hover:border-primary/40',
+                            )}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* ── Classification row ── */}
+            <div className="px-5 py-3 border-b grid grid-cols-3 gap-5">
+              <div>
+                <SectionLabel>Need / Want / Savings</SectionLabel>
+                <PillGroup
+                  value={local.need_want_savings}
+                  options={[
+                    { value: 'need', label: 'Need' },
+                    { value: 'want', label: 'Want' },
+                    { value: 'savings', label: 'Savings' },
+                  ]}
                   onChange={(v) => set({ need_want_savings: v as TransactionFilters['need_want_savings'] })}
                 />
-                <SelectFilter
-                  label="Fixed / Variable"
-                  value={(localFilters as Record<string, unknown>).fixed_variable as string}
-                  options={FIXED_VARIABLE_OPTIONS}
+              </div>
+              <div>
+                <SectionLabel>Fixed / Variable</SectionLabel>
+                <PillGroup
+                  value={(local as Record<string, unknown>).fixed_variable as string}
+                  options={[
+                    { value: 'fixed', label: 'Fixed' },
+                    { value: 'variable', label: 'Variable' },
+                  ]}
                   onChange={(v) => set({ fixed_variable: v } as Partial<TransactionFilters>)}
                 />
-                <SelectFilter
-                  label="Personal / Work"
-                  value={localFilters.personal_work_shared}
-                  options={PERSONAL_WORK_OPTIONS}
+              </div>
+              <div>
+                <SectionLabel>Personal / Work</SectionLabel>
+                <PillGroup
+                  value={local.personal_work_shared}
+                  options={[
+                    { value: 'personal', label: 'Personal' },
+                    { value: 'work', label: 'Work' },
+                    { value: 'shared', label: 'Shared' },
+                  ]}
                   onChange={(v) => set({ personal_work_shared: v as TransactionFilters['personal_work_shared'] })}
                 />
               </div>
-            </FilterSection>
-
-            <Separator />
-
-            {/* Reimbursement + Flags */}
-            <div className="grid grid-cols-2 gap-5">
-              <FilterSection title="Reimbursement">
-                <div className="space-y-2">
-                  <SelectFilter
-                    label="Status"
-                    value={localFilters.reimbursement_status}
-                    options={REIMBURSEMENT_STATUS_OPTIONS}
-                    onChange={(v) => set({ reimbursement_status: v as TransactionFilters['reimbursement_status'] })}
-                  />
-                  <div className="flex items-center justify-between pt-1">
-                    <Label className="text-xs">Only reimbursable</Label>
-                    <Switch
-                      checked={localFilters.is_reimbursable === true}
-                      onCheckedChange={(v) => set({ is_reimbursable: v || undefined })}
-                    />
-                  </div>
-                </div>
-              </FilterSection>
-
-              <FilterSection title="Other Flags">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs">Recurring only</Label>
-                    <Switch
-                      checked={localFilters.is_recurring === true}
-                      onCheckedChange={(v) => set({ is_recurring: v || undefined })}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs">Needs review only</Label>
-                    <Switch
-                      checked={localFilters.needs_review === true}
-                      onCheckedChange={(v) => set({ needs_review: v || undefined })}
-                    />
-                  </div>
-                  <SelectFilter
-                    label="Source"
-                    value={localFilters.source as string}
-                    options={TRANSACTION_SOURCE_OPTIONS}
-                    onChange={(v) => set({ source: v } as Partial<TransactionFilters>)}
-                  />
-                </div>
-              </FilterSection>
             </div>
 
-            {/* Apply / Reset */}
-            <div className="flex items-center justify-between pt-2 border-t">
-              <Button variant="ghost" size="sm" onClick={onReset}>
-                <RotateCcw className="w-3.5 h-3.5" /> Reset all filters
-              </Button>
-              <Button size="sm" onClick={apply}>
-                Apply Filters
-              </Button>
+            {/* ── Flags row ── */}
+            <div className="px-5 py-3 border-b flex items-center gap-3 flex-wrap">
+              <SectionLabel>Filters</SectionLabel>
+              <div className="flex items-center gap-2 flex-wrap">
+                <FlagChip
+                  label="Reimbursable only"
+                  active={local.is_reimbursable === true}
+                  onToggle={() => set({ is_reimbursable: local.is_reimbursable ? undefined : true })}
+                />
+                <FlagChip
+                  label="Recurring only"
+                  active={local.is_recurring === true}
+                  onToggle={() => set({ is_recurring: local.is_recurring ? undefined : true })}
+                />
+                <FlagChip
+                  label="Needs review"
+                  active={local.needs_review === true}
+                  onToggle={() => set({ needs_review: local.needs_review ? undefined : true })}
+                />
+
+                {/* Reimbursement status — only shown if reimbursable flag is on */}
+                <AnimatePresence>
+                  {local.is_reimbursable && (
+                    <motion.div
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <Select
+                        value={local.reimbursement_status ?? '__any'}
+                        onValueChange={(v) => set({ reimbursement_status: v === '__any' ? undefined : v as TransactionFilters['reimbursement_status'] })}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-36 border-primary/30">
+                          <SelectValue placeholder="Any status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__any">Any status</SelectItem>
+                          <SelectItem value="to_submit">To Submit</SelectItem>
+                          <SelectItem value="submitted">Submitted</SelectItem>
+                          <SelectItem value="approved">Approved</SelectItem>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="partial">Partial</SelectItem>
+                          <SelectItem value="rejected">Rejected</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Source */}
+                <Select
+                  value={(local as Record<string, unknown>).source as string ?? '__any'}
+                  onValueChange={(v) => set({ source: v === '__any' ? undefined : v } as Partial<TransactionFilters>)}
+                >
+                  <SelectTrigger className="h-7 text-xs w-28">
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__any">Any source</SelectItem>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="import">Import</SelectItem>
+                    <SelectItem value="ios">iOS</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+
+            {/* ── Footer ── */}
+            <div className="px-5 py-3 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={onReset}
+                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset all filters
+              </button>
+              <div className="flex items-center gap-2">
+                {activeCount > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {activeCount} filter{activeCount !== 1 ? 's' : ''} set
+                  </span>
+                )}
+                <Button size="sm" onClick={apply} className="h-8 px-4">
+                  Apply
+                </Button>
+              </div>
+            </div>
+
           </div>
         </motion.div>
       )}

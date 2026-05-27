@@ -399,6 +399,7 @@ export function Budget() {
         {nwsConfig.map(({ key, label, color, spent, target_pct }) => {
           const pct = totalSpend > 0 ? (spent / totalSpend) * 100 : 0
           const delta = pct - target_pct
+          const isSavings = key === 'savings'
           return (
             <Card key={key}>
               <CardContent className="pt-4 pb-4">
@@ -431,6 +432,11 @@ export function Budget() {
                     )}
                   </span>
                 </div>
+                {isSavings && spent === 0 && (
+                  <p className="text-[10px] text-muted-foreground/70 mt-1.5 leading-snug">
+                    Counts transactions tagged as "Savings" type (e.g. transfers to savings account).
+                  </p>
+                )}
               </CardContent>
             </Card>
           )
@@ -439,27 +445,20 @@ export function Budget() {
 
       {/* Totals summary */}
       {!loading && rows.length > 0 && (
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
           {[
-            { label: 'Total Budget', value: totals.budget, dimmed: false },
-            { label: 'Gross Spend', value: totals.gross_spend, dimmed: false },
-            { label: 'Reimbursed', value: totals.reimbursed, dimmed: true },
-            {
-              label: 'Net Personal',
-              value: totals.net_personal,
-              dimmed: false,
-              highlight: totals.net_personal > totals.budget ? 'destructive' : 'normal',
-            },
-          ].map(({ label, value, dimmed, highlight }) => (
+            { label: 'Total Budget', value: totals.budget, color: '' },
+            { label: 'Gross Spend', value: totals.gross_spend, color: '' },
+            { label: 'Reimbursed', value: totals.reimbursed, color: 'text-muted-foreground' },
+            { label: 'Net Personal', value: totals.net_personal,
+              color: totals.net_personal > totals.budget ? 'text-destructive' : '' },
+            { label: 'Budget Remaining', value: totals.remaining,
+              color: totals.remaining >= 0 ? 'text-green-600 dark:text-green-400' : 'text-destructive' },
+          ].map(({ label, value, color }) => (
             <Card key={label}>
-              <CardContent className="pt-4 pb-4">
-                <p className="text-xs text-muted-foreground mb-1">{label}</p>
-                <p className={`text-lg font-semibold tabular-nums ${
-                  highlight === 'destructive' ? 'text-destructive' :
-                  dimmed ? 'text-muted-foreground' : ''
-                }`}>
-                  {fmt(value)}
-                </p>
+              <CardContent className="pt-3 pb-3 px-4">
+                <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+                <p className={`text-base font-semibold tabular-nums ${color}`}>{fmt(value)}</p>
               </CardContent>
             </Card>
           ))}

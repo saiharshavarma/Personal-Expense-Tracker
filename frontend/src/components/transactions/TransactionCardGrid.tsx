@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAccountsStore } from '@/store'
 import { getCategoryColor } from '@/lib/categories'
-import { formatCurrency, formatDate, getReviewReason } from '@/lib/utils'
+import { formatCurrency, formatDate, getReviewReasons, isNeedsReview } from '@/lib/utils'
 import type { Transaction } from '@/types'
 
 interface TransactionCardGridProps {
@@ -34,13 +34,21 @@ function TransactionCard({
   const isDebit = t.direction === 'debit'
   const catColor = getCategoryColor(t.category)
 
+  const needsReview = isNeedsReview(t)
+  const reviewReasons = needsReview ? getReviewReasons(t) : []
+  const hasRedReason = reviewReasons.some((r) => r.color === 'red')
+
   return (
     <Card
-      className={`overflow-hidden cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm group ${selected ? 'border-primary bg-primary/5' : ''}`}
+      className={`overflow-hidden cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm group border-l-4 ${
+        needsReview
+          ? hasRedReason ? 'border-l-red-400' : 'border-l-amber-400'
+          : 'border-l-transparent'
+      } ${selected ? 'border-primary bg-primary/5' : ''}`}
       onClick={onEdit}
     >
       <CardContent className="p-4">
-        {/* Top row: checkbox + category badge + amount */}
+        {/* Top row: checkbox + category+subcategory + amount */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onSelect() }}>
             <input
@@ -49,11 +57,22 @@ function TransactionCard({
               onChange={onSelect}
               className="w-4 h-4 rounded border-muted-foreground accent-primary cursor-pointer"
             />
-            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${t.category ? catColor : 'bg-muted text-muted-foreground'}`}>
-              {t.category ?? 'Uncategorized'}
-            </span>
+            <div className="min-w-0 flex flex-col gap-1">
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full self-start ${t.category ? catColor : 'bg-muted text-muted-foreground'}`}>
+                {t.category ?? 'Uncategorized'}
+              </span>
+              {t.subcategory ? (
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full self-start ${catColor}`}>
+                  {t.subcategory}
+                </span>
+              ) : t.category ? (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full self-start bg-muted text-muted-foreground">
+                  Add subcategory
+                </span>
+              ) : null}
+            </div>
           </div>
-          <span className={`text-base font-bold tabular-nums ${isDebit ? '' : 'text-green-600 dark:text-green-400'}`}>
+          <span className={`text-base font-bold tabular-nums flex-shrink-0 ${isDebit ? '' : 'text-green-600 dark:text-green-400'}`}>
             {isDebit ? '' : '+'}{formatCurrency(t.amount)}
           </span>
         </div>
@@ -62,16 +81,16 @@ function TransactionCard({
         <p className="text-sm font-medium truncate">
           {t.merchant ?? t.description_clean ?? t.description ?? '—'}
         </p>
-        {t.notes ? (
+        {t.notes?.trim() ? (
           <p className="text-xs text-muted-foreground truncate mb-1">
             <span className="opacity-50">for</span> {t.notes}
           </p>
-        ) : (
+        ) : !needsReview ? (
           <span className="inline-flex items-center gap-1 text-xs font-medium mb-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
             <PenLine className="w-3 h-3 flex-shrink-0" />
             Add a note
           </span>
-        )}
+        ) : null}
 
         {/* Meta row */}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -90,13 +109,11 @@ function TransactionCard({
           </div>
         </div>
 
-        {/* Flags */}
-        <div className="flex items-center gap-2 mt-2">
-          {t.needs_review && (() => {
-            const r = getReviewReason(t)
-            if (!r) return null
-            return (
-              <span className={`flex items-center gap-0.5 text-xs ${
+        {/* Review reason chips */}
+        {reviewReasons.length > 0 && (
+          <div className="flex flex-col gap-1.5 mt-2">
+            {reviewReasons.map((r, ri) => (
+              <span key={ri} className={`flex items-center gap-0.5 text-xs ${
                 r.color === 'red'  ? 'text-red-500 dark:text-red-400' :
                 r.color === 'blue' ? 'text-blue-500 dark:text-blue-400' :
                                      'text-amber-500 dark:text-amber-400'
@@ -104,8 +121,12 @@ function TransactionCard({
                 <AlertCircle className="w-3 h-3 flex-shrink-0" />
                 {r.label}
               </span>
-            )
-          })()}
+            ))}
+          </div>
+        )}
+
+        {/* Other flags */}
+        <div className="flex flex-wrap items-center gap-1.5 mt-1">
           {t.is_reimbursable && (
             <span className="flex items-center gap-0.5 text-xs text-blue-600 dark:text-blue-400">
               <DollarSign className="w-3 h-3" /> Reimbursable

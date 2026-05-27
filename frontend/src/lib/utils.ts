@@ -43,62 +43,90 @@ export function getCurrentMonthYear(): { month: number; year: number } {
   return { month: now.getMonth() + 1, year: now.getFullYear() }
 }
 
-// ── Review reason helper ──────────────────────────────────────────────────────
-// Returns a specific human-readable reason WHY a transaction needs review,
-// plus a color token. Used in the table and card grid instead of "Needs review".
+// ── Review reasons helper ─────────────────────────────────────────────────────
+// Returns ALL reasons WHY a transaction needs review, with a color token each.
+// Used in the table and card grid to show field-level guidance.
 
 export type ReviewReason = {
   label: string
   color: 'red' | 'yellow' | 'blue'
-} | null
+}
 
-export function getReviewReason(t: {
+export function getReviewReasons(t: {
+  needs_review?: boolean
   ai_confidence: number | null
   ai_flags?: string[]
   ai_category: string | null
   category: string | null
+  subcategory?: string | null
+  notes?: string | null
   source?: string
-}): ReviewReason {
-  const conf = t.ai_confidence  // 0–1 scale
+}): ReviewReason[] {
+  const reasons: ReviewReason[] = []
+  const conf = t.ai_confidence
   const flags = t.ai_flags ?? []
 
-  // No category at all — highest priority
-  if (!t.category && !t.ai_category) {
-    return { label: 'Uncategorized', color: 'yellow' }
+  // ── Field-level: missing data the user should fill in ──
+  if (!t.category) {
+    if (t.ai_category) {
+      reasons.push({ label: `Category missing (AI: ${t.ai_category})`, color: 'yellow' })
+    } else {
+      reasons.push({ label: 'Category missing', color: 'yellow' })
+    }
+  } else if (!t.subcategory?.trim()) {
+    reasons.push({ label: 'Pick a subcategory', color: 'yellow' })
+  }
+  if (!t.notes?.trim()) {
+    reasons.push({ label: 'Add a note', color: 'yellow' })
   }
 
-  // AI has a suggestion but hasn't been applied yet
-  if (t.ai_category && !t.category) {
-    return { label: `Accept AI: ${t.ai_category}`, color: 'yellow' }
-  }
-
-  // Confidence-based reasons
-  if (conf !== null) {
+  // ── AI confidence ──
+  if (conf !== null && t.category) {
     const pct = Math.round(conf * 100)
     if (conf < 0.75) {
-      return { label: `AI unsure — ${pct}% confident`, color: 'red' }
-    }
-    if (conf < 0.90) {
-      return { label: `Check category — ${pct}% confident`, color: 'yellow' }
+      reasons.push({ label: `AI unsure — ${pct}% confident`, color: 'red' })
+    } else if (conf < 0.90) {
+      reasons.push({ label: `Check category — ${pct}%`, color: 'yellow' })
     }
   }
 
-  // Flag-based reasons (checked after confidence)
-  if (flags.includes('large_amount')) {
-    return { label: 'Unusually large amount', color: 'yellow' }
-  }
-  if (flags.includes('work_expense')) {
-    return { label: 'Possible work expense', color: 'blue' }
-  }
-  if (flags.includes('unusual')) {
-    return { label: 'Unusual transaction', color: 'yellow' }
-  }
-  if (flags.includes('reimbursable')) {
-    return { label: 'Possible reimbursable', color: 'blue' }
+  // ── AI flags ──
+  if (flags.includes('large_amount'))  reasons.push({ label: 'Unusually large amount', color: 'yellow' })
+  if (flags.includes('work_expense'))  reasons.push({ label: 'Possible work expense',  color: 'blue'   })
+  if (flags.includes('unusual'))       reasons.push({ label: 'Unusual transaction',     color: 'yellow' })
+  if (flags.includes('reimbursable'))  reasons.push({ label: 'Possible reimbursable',   color: 'blue'   })
+
+  // Fallback so needs_review rows always show something
+  if (reasons.length === 0) {
+    reasons.push({ label: 'Flagged for review', color: 'yellow' })
   }
 
-  // No specific reason found — stale flag, don't surface anything
-  return null
+  return reasons
+}
+
+// Back-compat single-reason shim for callers that only need one label
+export function getReviewReason(t: Parameters<typeof getReviewReasons>[0]): ReviewReason | null {
+  const all = getReviewReasons(t)
+  return all.length > 0 ? all[0] : null
+}
+
+// ── Computed needs-review ─────────────────────────────────────────────────────
+// Returns true when a transaction is effectively missing required fields,
+// regardless of the backend `needs_review` flag.  Use this everywhere in the
+// UI instead of checking `t.needs_review` directly.
+export function isNeedsReview(t: {
+  needs_review?: boolean
+  category: string | null
+  subcategory?: string | null
+  notes?: string | null
+} | null | undefined): boolean {
+  if (!t) return false
+  return !!(
+    t.needs_review ||
+    !t.category?.trim() ||
+    (t.category?.trim() && !t.subcategory?.trim()) ||
+    !t.notes?.trim()
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

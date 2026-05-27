@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, ClipboardList } from 'lucide-react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,7 +9,9 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { useTransactionsStore, useAccountsStore } from '@/store'
+import { api } from '@/utils/apiClient'
 import { ALL_CATEGORIES, getSubcategories, NEED_WANT_SAVINGS_OPTIONS, FIXED_VARIABLE_OPTIONS, PERSONAL_WORK_OPTIONS } from '@/lib/categories'
+import { isNeedsReview } from '@/lib/utils'
 import type { Transaction } from '@/types'
 
 interface Props {
@@ -24,10 +26,11 @@ const emptyForm = () => ({
   date: today(),
   amount: '',
   direction: 'debit',
-  description: '',       // raw bank string / optional label
-  paid_to: '',           // → merchant: who you paid (DoorDash, Amazon, Alex)
-  notes: '',             // → notes: what it was for (pepperoni pizza, monitor, May electricity)
+  description: '',
+  paid_to: '',
+  notes: '',
   account_id: '',
+  trip_id: '',
   category: '',
   subcategory: '',
   need_want_savings: '',
@@ -51,6 +54,7 @@ function toForm(t: Transaction): FormState {
     paid_to: t.merchant ?? '',
     notes: t.notes ?? '',
     account_id: t.account_id ?? '',
+    trip_id: t.business_trip_id ?? '',
     category: t.category ?? '',
     subcategory: t.subcategory ?? '',
     need_want_savings: t.need_want_savings ?? '',
@@ -67,15 +71,34 @@ function toForm(t: Transaction): FormState {
 export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) {
   const { addTransaction, updateTransaction } = useTransactionsStore()
   const { accounts } = useAccountsStore()
+  const [trips, setTrips] = useState<Array<{ id: string; name: string; status: string; start_date: string | null; end_date: string | null }>>([])
   const [form, setForm] = useState<FormState>(emptyForm())
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [createSub, setCreateSub] = useState(false)
   const isEdit = Boolean(transaction)
+
+  // When editing a transaction that needs review (computed from field values, not
+  // just the backend flag), track which specific fields need attention so we
+  // can highlight them in the form.
+  const txNeedsReview = isNeedsReview(transaction)
+  const reviewHints = isEdit && txNeedsReview
+    ? {
+        category: !transaction!.category?.trim(),
+        subcategory: !!(transaction!.category?.trim() && !transaction!.subcategory?.trim()),
+        notes: !transaction!.notes?.trim(),
+      }
+    : { category: false, subcategory: false, notes: false }
+
+  useEffect(() => {
+    api.get('/trips').then((r) => setTrips(r.data)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (open) {
       setForm(transaction ? toForm(transaction) : emptyForm())
       setErrors({})
+      setCreateSub(false)
     }
   }, [open, transaction])
 
@@ -87,7 +110,7 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
     if (!form.date) e.date = 'Required'
     if (!form.amount || isNaN(Number(form.amount)) || Number(form.amount) <= 0)
       e.amount = 'Enter a positive amount'
-    if (!form.paid_to.trim()) e.paid_to = 'Required — who did you pay?'
+    if (!form.paid_to.trim()) e.paid_to = form.direction === 'credit' ? 'Required — who paid you?' : 'Required — who did you pay?'
     if (!form.notes.trim()) e.notes = 'Required — what was this for?'
     setErrors(e)
     return Object.keys(e).length === 0
@@ -106,6 +129,7 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
         merchant: form.paid_to.trim() || null,
         notes: form.notes.trim() || null,
         account_id: form.account_id || null,
+        business_trip_id: form.trip_id || null,
         category: form.category || null,
         subcategory: form.subcategory || null,
         need_want_savings: (form.need_want_savings || null) as Transaction['need_want_savings'],
@@ -113,16 +137,40 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
         personal_work_shared: (form.personal_work_shared || null) as Transaction['personal_work_shared'],
         tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
         is_reimbursable: form.is_reimbursable,
+        reimbursement_status: form.is_reimbursable
+          ? (isEdit && transaction?.reimbursement_status && transaction.reimbursement_status !== 'not_reimbursable'
+              ? transaction.reimbursement_status
+              : 'to_submit')
+          : 'not_reimbursable',
         reimbursement_source: form.is_reimbursable ? form.reimbursement_source || null : null,
         expected_reimbursement: form.is_reimbursable && form.expected_reimbursement
           ? Number(form.expected_reimbursement) : null,
         is_recurring: form.is_recurring,
         source: 'manual',
       }
+      // Auto-clear needs_review when editing a flagged transaction and the user
+      // has now filled in all the commonly-missing fields.
+      if (isEdit && transaction && txNeedsReview) {
+        const subcatOk = !form.category || !!form.subcategory
+        const resolved = !!(form.notes.trim() && form.category && subcatOk)
+        if (resolved) (payload as Record<string, unknown>).needs_review = false
+      }
       if (isEdit && transaction) {
         await updateTransaction(transaction.id, payload)
       } else {
         await addTransaction(payload)
+        if (createSub && form.is_recurring) {
+          await api.post('/subscriptions', {
+            name: form.paid_to.trim(),
+            amount: Number(form.amount),
+            billing_frequency: 'monthly',
+            category: form.category || null,
+            subcategory: form.subcategory || null,
+            personal_work_shared: form.personal_work_shared || 'personal',
+            account_id: form.account_id || null,
+            notes: form.notes.trim() || null,
+          }).catch(() => {})
+        }
       }
       onOpenChange(false)
     } catch (err: unknown) {
@@ -144,6 +192,38 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
             {isEdit ? 'Update the transaction details below.' : 'Manually log a transaction.'}
           </SheetDescription>
         </SheetHeader>
+
+        {/* ── Needs-review banner ── */}
+        {isEdit && txNeedsReview && (
+          <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5 mb-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <ClipboardList className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">This transaction needs your attention</p>
+            </div>
+            <ul className="space-y-0.5 pl-5 list-disc">
+              {reviewHints.category && (
+                <li className="text-xs text-amber-700 dark:text-amber-300">
+                  <span className="font-medium">Category</span> is missing — pick one below
+                </li>
+              )}
+              {reviewHints.subcategory && (
+                <li className="text-xs text-amber-700 dark:text-amber-300">
+                  <span className="font-medium">Subcategory</span> is missing — pick one below
+                </li>
+              )}
+              {reviewHints.notes && (
+                <li className="text-xs text-amber-700 dark:text-amber-300">
+                  <span className="font-medium">Notes</span> are missing — describe what this was for
+                </li>
+              )}
+              {!reviewHints.category && !reviewHints.subcategory && !reviewHints.notes && (
+                <li className="text-xs text-amber-700 dark:text-amber-300">
+                  Review the details and save when everything looks correct
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
 
@@ -201,11 +281,13 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
 
             <div>
               <Label className="text-xs">
-                Paid To *
-                <span className="ml-1 font-normal text-muted-foreground">— who received the payment?</span>
+                {form.direction === 'credit' ? 'Received From *' : 'Paid To *'}
+                <span className="ml-1 font-normal text-muted-foreground">
+                  {form.direction === 'credit' ? '— who sent you money?' : '— who received the payment?'}
+                </span>
               </Label>
               <Input
-                placeholder="e.g. DoorDash, Amazon, Alex (flatmate)"
+                placeholder={form.direction === 'credit' ? 'e.g. Acme Corp, John, Freelance Client' : 'e.g. DoorDash, Amazon, Alex (flatmate)'}
                 value={form.paid_to}
                 onChange={(e) => set('paid_to', e.target.value)}
                 className={`mt-1 ${errors.paid_to ? 'border-destructive' : ''}`}
@@ -219,15 +301,19 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
             </div>
 
             <div className="pt-1">
-              <Label className="text-xs">
+              <Label className={`text-xs ${reviewHints.notes ? 'text-amber-700 dark:text-amber-400' : ''}`}>
                 What was it for? *
                 <span className="ml-1 font-normal text-muted-foreground">— a note you'll remember</span>
+                {reviewHints.notes && <span className="ml-1.5 text-amber-600 dark:text-amber-400">← fill this in</span>}
               </Label>
               <Textarea
                 placeholder="e.g. Pepperoni pizza for Friday night, Monitor for home office, May electricity bill"
                 value={form.notes}
                 onChange={(e) => set('notes', e.target.value)}
-                className={`mt-1 resize-none ${errors.notes ? 'border-destructive' : ''}`}
+                className={`mt-1 resize-none ${
+                  errors.notes ? 'border-destructive' :
+                  reviewHints.notes ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/40' : ''
+                }`}
                 rows={2}
               />
               {errors.notes && (
@@ -261,6 +347,36 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
             </Select>
           </div>
 
+          {/* ── Trip ── */}
+          {trips.filter((t) => t.status !== 'archived').length > 0 && (
+            <div>
+              <Label className="text-xs">Trip</Label>
+              <Select
+                value={form.trip_id || '__none'}
+                onValueChange={(v) => set('trip_id', v === '__none' ? '' : v)}
+              >
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="No trip" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">No trip</SelectItem>
+                  {trips
+                    .filter((t) => t.status !== 'archived')
+                    .map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                        {t.start_date && (
+                          <span className="ml-1.5 text-muted-foreground text-xs">
+                            {t.start_date.slice(0, 7)}
+                          </span>
+                        )}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {/* ── Optional raw description ── */}
           <div>
             <Label className="text-xs text-muted-foreground">
@@ -283,12 +399,19 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs">Category</Label>
+                <Label className={`text-xs ${reviewHints.category ? 'text-amber-700 dark:text-amber-400' : ''}`}>
+                  Category
+                  {reviewHints.category && <span className="ml-1.5 text-amber-600 dark:text-amber-400">← fill this in</span>}
+                </Label>
                 <Select
                   value={form.category || '__none'}
                   onValueChange={(v) => { set('category', v === '__none' ? '' : v); set('subcategory', '') }}
                 >
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger className={`mt-1 ${
+                    reviewHints.category && !form.category
+                      ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/40'
+                      : ''
+                  }`}>
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -300,13 +423,20 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Subcategory</Label>
+                <Label className={`text-xs ${reviewHints.subcategory ? 'text-amber-700 dark:text-amber-400' : ''}`}>
+                  Subcategory
+                  {reviewHints.subcategory && <span className="ml-1.5 text-amber-600 dark:text-amber-400">← fill this in</span>}
+                </Label>
                 <Select
                   value={form.subcategory || '__none'}
                   onValueChange={(v) => set('subcategory', v === '__none' ? '' : v)}
                   disabled={!form.category || subcats.length === 0}
                 >
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger className={`mt-1 ${
+                    reviewHints.subcategory && !form.subcategory
+                      ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/40'
+                      : ''
+                  }`}>
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -409,8 +539,20 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Recurring</Label>
-              <Switch checked={form.is_recurring} onCheckedChange={(v) => set('is_recurring', v)} />
+              <Switch
+                checked={form.is_recurring}
+                onCheckedChange={(v) => { set('is_recurring', v); if (!v) setCreateSub(false) }}
+              />
             </div>
+            {form.is_recurring && !isEdit && (
+              <div className="rounded-lg bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800 px-3 py-2.5 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-violet-700 dark:text-violet-300">Also add as subscription?</p>
+                  <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">Creates a matching entry in your Subscriptions tracker</p>
+                </div>
+                <Switch checked={createSub} onCheckedChange={setCreateSub} />
+              </div>
+            )}
             <div>
               <Label className="text-xs text-muted-foreground">Tags</Label>
               <Input

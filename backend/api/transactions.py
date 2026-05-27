@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date as _Date
 from decimal import Decimal
 from typing import List, Optional
 
@@ -16,11 +16,12 @@ router = APIRouter(tags=["transactions"])
 
 
 class TransactionCreate(BaseModel):
-    date: date
+    date: _Date
     amount: Decimal
     direction: str
     description: Optional[str] = None
     account_id: Optional[uuid.UUID] = None
+    business_trip_id: Optional[uuid.UUID] = None
     transaction_type: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
@@ -40,11 +41,12 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
-    date: Optional[date] = None
+    date: Optional[_Date] = None
     amount: Optional[Decimal] = None
     direction: Optional[str] = None
     description: Optional[str] = None
     account_id: Optional[uuid.UUID] = None
+    business_trip_id: Optional[uuid.UUID] = None
     transaction_type: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
@@ -82,6 +84,7 @@ def _serialize(t: Transaction) -> dict:
         "description_clean": t.description_clean,
         "merchant": t.merchant,
         "account_id": str(t.account_id) if t.account_id else None,
+        "business_trip_id": str(t.business_trip_id) if t.business_trip_id else None,
         "transaction_type": t.transaction_type,
         "category": t.category,
         "subcategory": t.subcategory,
@@ -114,8 +117,8 @@ def _serialize(t: Transaction) -> dict:
 async def list_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
-    date_from: Optional[date] = None,
-    date_to: Optional[date] = None,
+    date_from: Optional[_Date] = None,
+    date_to: Optional[_Date] = None,
     account_id: Optional[uuid.UUID] = None,
     category: Optional[str] = None,
     subcategory: Optional[str] = None,
@@ -199,6 +202,68 @@ async def list_transactions(
         "page_size": page_size,
         "pages": (total + page_size - 1) // page_size,
     }
+
+
+@router.get("/summary")
+async def get_summary(
+    date_from: Optional[_Date] = None,
+    date_to: Optional[_Date] = None,
+    account_id: Optional[uuid.UUID] = None,
+    category: Optional[str] = None,
+    direction: Optional[str] = None,
+    is_reimbursable: Optional[bool] = None,
+    need_want_savings: Optional[str] = None,
+    fixed_variable: Optional[str] = None,
+    personal_work_shared: Optional[str] = None,
+    search: Optional[str] = None,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return recurring vs one-time spend totals for the given filters."""
+    filters = []
+    if date_from:
+        filters.append(Transaction.date >= date_from)
+    if date_to:
+        filters.append(Transaction.date <= date_to)
+    if account_id:
+        filters.append(Transaction.account_id == account_id)
+    if category:
+        filters.append(Transaction.category == category)
+    if direction:
+        filters.append(Transaction.direction == direction)
+    if is_reimbursable is not None:
+        filters.append(Transaction.is_reimbursable == is_reimbursable)
+    if need_want_savings:
+        filters.append(Transaction.need_want_savings == need_want_savings)
+    if fixed_variable:
+        filters.append(Transaction.fixed_variable == fixed_variable)
+    if personal_work_shared:
+        filters.append(Transaction.personal_work_shared == personal_work_shared)
+    if search:
+        filters.append(or_(
+            Transaction.description.ilike(f"%{search}%"),
+            Transaction.merchant.ilike(f"%{search}%"),
+            Transaction.description_clean.ilike(f"%{search}%"),
+        ))
+
+    where = and_(*filters) if filters else True
+
+    result = await db.execute(
+        select(
+            Transaction.is_recurring,
+            func.count().label("count"),
+            func.coalesce(func.sum(Transaction.amount), 0).label("total"),
+        )
+        .where(where)
+        .group_by(Transaction.is_recurring)
+    )
+    rows = result.all()
+
+    summary = {"recurring": {"count": 0, "total": 0.0}, "one_time": {"count": 0, "total": 0.0}}
+    for row in rows:
+        key = "recurring" if row.is_recurring else "one_time"
+        summary[key] = {"count": row.count, "total": float(row.total)}
+    return summary
 
 
 @router.post("", status_code=201)
@@ -307,6 +372,7 @@ async def bulk_action(
                 "personal_work_shared", "is_reimbursable", "reimbursement_source",
                 "reimbursement_status", "expected_reimbursement", "notes",
                 "merchant", "needs_review", "ai_reviewed", "is_recurring",
+                "business_trip_id",
             }
             for field, value in body.payload.items():
                 if field in allowed and hasattr(t, field):

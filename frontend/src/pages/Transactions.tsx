@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Search, Filter, Plus, LayoutList, LayoutGrid, Download, ChevronLeft, ChevronRight, CreditCard } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Search, Filter, Plus, LayoutList, LayoutGrid, Download, ChevronLeft, ChevronRight, CreditCard, Repeat2, Zap, FileText, FileSpreadsheet, FileJson } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
 import { Button } from '@/components/ui/button'
@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { useTransactionsStore } from '@/store'
 import { useAccounts } from '@/hooks/useAccounts'
-import { TransactionTable, ColumnPicker, DEFAULT_VISIBLE } from '@/components/transactions/TransactionTable'
+import { TransactionTable, ColumnPicker, DEFAULT_VISIBLE, DEFAULT_ORDER } from '@/components/transactions/TransactionTable'
 import type { ColKey } from '@/components/transactions/TransactionTable'
 import { TransactionCardGrid } from '@/components/transactions/TransactionCardGrid'
 import { FilterPanel } from '@/components/transactions/FilterPanel'
@@ -15,8 +15,18 @@ import { ActiveFilterChips } from '@/components/transactions/ActiveFilterChips'
 import { BulkActionBar } from '@/components/transactions/BulkActionBar'
 import { AddTransactionSheet } from '@/components/transactions/AddTransactionSheet'
 import { AccountsModal } from '@/components/accounts/AccountsModal'
-import { cn, debounce } from '@/lib/utils'
-import type { Transaction, TransactionFilters } from '@/types'
+import { cn, debounce, formatCurrency } from '@/lib/utils'
+import { api } from '@/utils/apiClient'
+import type { Transaction, TransactionFilters, Trip } from '@/types'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+
+interface SpendSummary {
+  recurring: { count: number; total: number }
+  one_time: { count: number; total: number }
+}
 
 export function Transactions() {
   const {
@@ -35,21 +45,85 @@ export function Transactions() {
   useAccounts()
 
   const [view, setView] = useState<'table' | 'card'>('table')
-  const [cols, setCols] = useState<Record<ColKey, boolean>>(DEFAULT_VISIBLE)
+  // Version key — bump this whenever COLUMN_DEFS defaultVisible/defaultWidth changes
+  // so users automatically get fresh defaults instead of stale stored layouts.
+  const LAYOUT_VERSION = '3'
+
+  const [cols, setCols] = useState<Record<ColKey, boolean>>(() => {
+    try {
+      if (localStorage.getItem('transaction_layout_version') !== LAYOUT_VERSION) {
+        // New defaults — wipe stored layout so the fresh defaults apply
+        localStorage.removeItem('transaction_columns')
+        localStorage.removeItem('transaction_col_order')
+        localStorage.removeItem('transaction_col_widths')
+        localStorage.setItem('transaction_layout_version', LAYOUT_VERSION)
+        return DEFAULT_VISIBLE
+      }
+      const stored = localStorage.getItem('transaction_columns')
+      if (stored) return { ...DEFAULT_VISIBLE, ...JSON.parse(stored) }
+    } catch {}
+    return DEFAULT_VISIBLE
+  })
+
+  const [colOrder, setColOrder] = useState<ColKey[]>(() => {
+    try {
+      const stored = localStorage.getItem('transaction_col_order')
+      if (stored) {
+        const parsed = JSON.parse(stored) as ColKey[]
+        // merge any new columns added since last visit
+        const missing = DEFAULT_ORDER.filter((k) => !parsed.includes(k))
+        return [...parsed, ...missing]
+      }
+    } catch {}
+    return [...DEFAULT_ORDER]
+  })
+
+  const [colWidths, setColWidths] = useState<Partial<Record<ColKey, number>>>(() => {
+    try {
+      const stored = localStorage.getItem('transaction_col_widths')
+      if (stored) return JSON.parse(stored)
+    } catch {}
+    return {}
+  })
   const [search, setSearch] = useState(filters.search ?? '')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
   const [accountsModalOpen, setAccountsModalOpen] = useState(false)
+  const [trips, setTrips] = useState<Trip[]>([])
+  const [summary, setSummary] = useState<SpendSummary | null>(null)
+  const summaryAbort = useRef<AbortController | null>(null)
 
-  useEffect(() => { fetchTransactions() }, [])
+  const fetchSummary = useCallback(async (f: TransactionFilters) => {
+    summaryAbort.current?.abort()
+    summaryAbort.current = new AbortController()
+    const params: Record<string, string> = {}
+    if (f.date_from) params.date_from = f.date_from
+    if (f.date_to) params.date_to = f.date_to
+    if (f.account_id) params.account_id = f.account_id
+    if (f.category) params.category = f.category
+    if (f.direction) params.direction = f.direction
+    if (f.is_reimbursable != null) params.is_reimbursable = String(f.is_reimbursable)
+    if (f.need_want_savings) params.need_want_savings = f.need_want_savings
+    if (f.fixed_variable) params.fixed_variable = f.fixed_variable
+    if (f.personal_work_shared) params.personal_work_shared = f.personal_work_shared
+    if (f.search) params.search = f.search
+    try {
+      const res = await api.get('/transactions/summary', { params, signal: summaryAbort.current.signal })
+      setSummary(res.data)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => { fetchTransactions(); fetchSummary({}) }, [])
+  useEffect(() => { api.get('/trips').then((r) => setTrips(r.data)).catch(() => {}) }, [])
 
   const debouncedSearch = useCallback(
     debounce((q: string) => {
       const merged = { ...filters, search: q || undefined, page: 1 }
       setFilters(merged)
       fetchTransactions(merged)
+      fetchSummary(merged)
     }, 350),
     []
   )
@@ -60,24 +134,60 @@ export function Transactions() {
   }
 
   const handleFilterChange = (newFilters: Partial<TransactionFilters>) => {
-    const merged = { ...filters, ...newFilters, page: 1 }
+    // Merge with current filters, then strip any keys explicitly set to undefined/null/''
+    // so that clearing a filter in the panel actually removes it.
+    const raw = { ...filters, ...newFilters, page: 1 }
+    const merged: TransactionFilters = Object.fromEntries(
+      Object.entries(raw).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ) as TransactionFilters
     setFilters(merged)
     fetchTransactions(merged)
+    fetchSummary(merged)
     setFiltersOpen(false)
   }
 
   const handleFilterReset = () => {
+    const base = { page: 1, page_size: 50, sort_by: 'date', sort_dir: 'desc' } as TransactionFilters
     resetFilters()
     setSearch('')
-    fetchTransactions({ page: 1, page_size: 50, sort_by: 'date', sort_dir: 'desc' })
+    fetchTransactions(base)
+    fetchSummary(base)
     setFiltersOpen(false)
   }
 
   const handleRemoveFilter = (key: keyof TransactionFilters) => {
     const next = { ...filters } as Record<string, unknown>
     delete next[key as string]
-    setFilters(next as TransactionFilters)
+    // Do NOT call setFilters here — fetchTransactions will set the correct store
+    // state after the request completes (store fix: override replaces, not merges).
     fetchTransactions(next as TransactionFilters)
+    fetchSummary(next as TransactionFilters)
+  }
+
+  const handleColsChange = (newCols: Record<ColKey, boolean>) => {
+    setCols(newCols)
+    try { localStorage.setItem('transaction_columns', JSON.stringify(newCols)) } catch {}
+  }
+
+  const handleColOrderChange = (order: ColKey[]) => {
+    setColOrder(order)
+    try { localStorage.setItem('transaction_col_order', JSON.stringify(order)) } catch {}
+  }
+
+  const handleColWidthsChange = (widths: Partial<Record<ColKey, number>>) => {
+    setColWidths(widths)
+    try { localStorage.setItem('transaction_col_widths', JSON.stringify(widths)) } catch {}
+  }
+
+  const handleResetLayout = () => {
+    setCols(DEFAULT_VISIBLE)
+    setColOrder([...DEFAULT_ORDER])
+    setColWidths({})
+    try {
+      localStorage.setItem('transaction_columns', JSON.stringify(DEFAULT_VISIBLE))
+      localStorage.removeItem('transaction_col_order')
+      localStorage.removeItem('transaction_col_widths')
+    } catch {}
   }
 
   const handleSortChange = (sortFilters: Partial<TransactionFilters>) => {
@@ -114,15 +224,59 @@ export function Transactions() {
     setSheetOpen(open)
     if (!open) {
       fetchTransactions(filters)
+      fetchSummary(filters)
       setEditingTransaction(null)
     }
   }
 
   const handleCategoryUpdate = async (id: string, category: string) => {
-    await updateTransaction(id, { category: category || null })
+    await updateTransaction(id, { category: category || null, subcategory: null })
   }
 
-  const refetch = () => fetchTransactions(filters)
+  const handleSubcategoryUpdate = async (id: string, subcategory: string) => {
+    await updateTransaction(id, { subcategory: subcategory || null })
+  }
+
+  const refetch = () => { fetchTransactions(filters); fetchSummary(filters) }
+
+  // ── Export helpers ──────────────────────────────────────────────────────────
+  const buildExportParams = () => {
+    const p = new URLSearchParams()
+    if (filters.date_from)         p.set('date_from', filters.date_from)
+    if (filters.date_to)           p.set('date_to', filters.date_to)
+    if (filters.category)          p.set('category', filters.category)
+    if (filters.direction)         p.set('direction', filters.direction)
+    if (filters.account_id)        p.set('account_id', filters.account_id)
+    if (filters.search)            p.set('search', filters.search)
+    if (filters.is_recurring != null) p.set('is_recurring', String(filters.is_recurring))
+    if (filters.need_want_savings) p.set('need_want_savings', filters.need_want_savings)
+    return p.toString() ? `?${p.toString()}` : ''
+  }
+
+  const triggerDownload = async (path: string, mimeType: string) => {
+    try {
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch(`${api.defaults.baseURL}${path}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(new Blob([blob], { type: mimeType }))
+      const a = document.createElement('a')
+      a.href = url
+      const cd = res.headers.get('content-disposition') || ''
+      const match = cd.match(/filename="?([^"]+)"?/)
+      a.download = match ? match[1] : 'export'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Export error:', err)
+    }
+  }
+
+  const handleExportCSV   = () => triggerDownload(`/export/csv${buildExportParams()}`,   'text/csv')
+  const handleExportExcel = () => triggerDownload(`/export/excel${buildExportParams()}`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  const handleExportJSON  = () => triggerDownload('/export/json', 'application/json')
 
   const activeFilterCount = Object.entries(filters).filter(([k, v]) => {
     if (['page', 'page_size', 'sort_by', 'sort_dir', 'search'].includes(k)) return false
@@ -142,10 +296,35 @@ export function Transactions() {
               <CreditCard className="w-4 h-4" />
               Accounts
             </Button>
-            <Button variant="outline" size="sm">
-              <Download className="w-4 h-4" />
-              Export
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Download className="w-4 h-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  {Object.keys(filters).some(k => !['page','page_size','sort_by','sort_dir'].includes(k) && (filters as Record<string,unknown>)[k])
+                    ? 'Filtered transactions'
+                    : 'All transactions'}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleExportCSV}>
+                  <FileText className="w-4 h-4 mr-2 text-green-600" />
+                  CSV — Spreadsheet
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportExcel}>
+                  <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />
+                  Excel — Formatted workbook
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleExportJSON}>
+                  <FileJson className="w-4 h-4 mr-2 text-blue-600" />
+                  JSON — Full data export
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button size="sm" onClick={handleAddNew}>
               <Plus className="w-4 h-4" />
               Add Transaction
@@ -153,6 +332,50 @@ export function Transactions() {
           </>
         }
       />
+
+      {/* Recurring vs one-time spend strip */}
+      {summary && (summary.recurring.count > 0 || summary.one_time.count > 0) && (
+        <div className="flex items-center gap-3 mb-4 text-sm flex-wrap">
+          {/* Total */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-card">
+            <span className="text-xs text-muted-foreground">Total</span>
+            <span className="font-semibold">
+              {formatCurrency(summary.recurring.total + summary.one_time.total)}
+            </span>
+            <span className="text-muted-foreground/60 text-xs">
+              {summary.recurring.count + summary.one_time.count} transactions
+            </span>
+          </div>
+          <span className="text-muted-foreground/30 text-xs">=</span>
+          {/* Recurring */}
+          <button
+            onClick={() => handleFilterChange({ is_recurring: true })}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700 hover:border-violet-400 transition-colors"
+          >
+            <Repeat2 className="w-3.5 h-3.5 text-violet-500" />
+            <span className="text-violet-700 dark:text-violet-300 font-medium">{formatCurrency(summary.recurring.total)}</span>
+            <span className="text-violet-500/70 dark:text-violet-400/60 text-xs">{summary.recurring.count} recurring</span>
+          </button>
+          <span className="text-muted-foreground/40 text-xs">+</span>
+          {/* One-time */}
+          <button
+            onClick={() => handleFilterChange({ is_recurring: false })}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-muted/40 hover:border-primary/40 transition-colors"
+          >
+            <Zap className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="font-medium">{formatCurrency(summary.one_time.total)}</span>
+            <span className="text-muted-foreground text-xs">{summary.one_time.count} one-time</span>
+          </button>
+          {(filters.is_recurring === true || filters.is_recurring === false) && (
+            <button
+              onClick={() => handleRemoveFilter('is_recurring')}
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Search + filters bar */}
       <div className="flex items-center gap-3 mb-3">
@@ -182,7 +405,7 @@ export function Transactions() {
 
         <div className="ml-auto flex items-center gap-2">
           {view === 'table' && (
-            <ColumnPicker cols={cols} onChange={setCols} />
+            <ColumnPicker cols={cols} onChange={handleColsChange} onResetAll={handleResetLayout} />
           )}
           <div className="flex items-center gap-1 rounded-lg border p-1">
             <button
@@ -225,8 +448,14 @@ export function Transactions() {
             onEdit={handleEdit}
             onDelete={handleDelete}
             onCategoryUpdate={handleCategoryUpdate}
+            onSubcategoryUpdate={handleSubcategoryUpdate}
             cols={cols}
-            onColsChange={setCols}
+            onColsChange={handleColsChange}
+            colOrder={colOrder}
+            colWidths={colWidths}
+            onColOrderChange={handleColOrderChange}
+            onColWidthsChange={handleColWidthsChange}
+            trips={trips}
           />
         ) : (
           <TransactionCardGrid
