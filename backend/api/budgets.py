@@ -1,15 +1,16 @@
 import uuid
 from typing import Optional
 from decimal import Decimal
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from db.database import get_db
-from db.models import Budget
+from db.models import Budget, Transaction, UserPreferences
 
 router = APIRouter(tags=["budgets"])
 
@@ -141,3 +142,164 @@ async def copy_previous_month(
 
     await db.commit()
     return {"created": created, "month": month, "year": year}
+
+
+@router.get("/actuals")
+async def get_actuals(
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(...),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return budget vs actual spending for each category in the given month.
+    Also returns 50/30/20 rule summary using user's custom percentages.
+    """
+    # Fetch budgets for this month
+    budget_result = await db.execute(
+        select(Budget).where(and_(Budget.month == month, Budget.year == year))
+    )
+    budgets = {b.category: b for b in budget_result.scalars().all()}
+
+    # Aggregate actual spending by category for this month
+    spending_result = await db.execute(
+        select(
+            Transaction.category,
+            func.sum(Transaction.amount).label("gross_spend"),
+            func.sum(Transaction.received_reimbursement).label("total_reimbursed"),
+        )
+        .where(
+            and_(
+                extract("month", Transaction.date) == month,
+                extract("year", Transaction.date) == year,
+                Transaction.direction == "debit",
+                Transaction.category.isnot(None),
+                Transaction.category != "",
+            )
+        )
+        .group_by(Transaction.category)
+    )
+    actuals: dict[str, dict] = {}
+    for row in spending_result:
+        actuals[row.category] = {
+            "gross_spend": float(row.gross_spend or 0),
+            "reimbursed": float(row.total_reimbursed or 0),
+        }
+
+    # Merge budgets + actuals — include all categories from either source
+    all_categories = sorted(set(list(budgets.keys()) + list(actuals.keys())))
+    rows = []
+    total_budget = 0.0
+    total_gross = 0.0
+    total_reimbursed = 0.0
+
+    for cat in all_categories:
+        budget_amount = float(budgets[cat].budget_amount) if cat in budgets else 0.0
+        gross = actuals.get(cat, {}).get("gross_spend", 0.0)
+        reimbursed = actuals.get(cat, {}).get("reimbursed", 0.0)
+        net = gross - reimbursed
+        remaining = budget_amount - net
+        pct_used = (net / budget_amount * 100) if budget_amount > 0 else 0.0
+
+        if pct_used >= 100:
+            status = "over"
+        elif pct_used >= 80:
+            status = "watch"
+        else:
+            status = "safe"
+
+        rows.append({
+            "id": str(budgets[cat].id) if cat in budgets else None,
+            "category": cat,
+            "budget_amount": budget_amount,
+            "gross_spend": round(gross, 2),
+            "reimbursed": round(reimbursed, 2),
+            "net_personal": round(net, 2),
+            "remaining": round(remaining, 2),
+            "pct_used": round(pct_used, 1),
+            "status": status,
+        })
+        total_budget += budget_amount
+        total_gross += gross
+        total_reimbursed += reimbursed
+
+    total_net = total_gross - total_reimbursed
+
+    # 50/30/20 breakdown: sum by need_want_savings
+    nws_result = await db.execute(
+        select(
+            Transaction.need_want_savings,
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            and_(
+                extract("month", Transaction.date) == month,
+                extract("year", Transaction.date) == year,
+                Transaction.direction == "debit",
+                Transaction.need_want_savings.isnot(None),
+            )
+        )
+        .group_by(Transaction.need_want_savings)
+    )
+    nws_map = {row.need_want_savings: float(row.total or 0) for row in nws_result}
+
+    # Get user's custom budget rule targets
+    prefs_result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = prefs_result.scalar_one_or_none()
+    budget_rule = (prefs.default_budget_rule or {}) if prefs else {}
+    needs_target = float(budget_rule.get("needs", 50))
+    wants_target = float(budget_rule.get("wants", 30))
+    savings_target = float(budget_rule.get("savings", 20))
+
+    total_income_est = total_net  # fallback; ideally from income_schedules
+    nws_summary = {
+        "needs": {
+            "spent": round(nws_map.get("need", 0.0), 2),
+            "target_pct": needs_target,
+        },
+        "wants": {
+            "spent": round(nws_map.get("want", 0.0), 2),
+            "target_pct": wants_target,
+        },
+        "savings": {
+            "spent": round(nws_map.get("savings", 0.0), 2),
+            "target_pct": savings_target,
+        },
+    }
+
+    return {
+        "month": month,
+        "year": year,
+        "rows": rows,
+        "totals": {
+            "budget": round(total_budget, 2),
+            "gross_spend": round(total_gross, 2),
+            "reimbursed": round(total_reimbursed, 2),
+            "net_personal": round(total_net, 2),
+            "remaining": round(total_budget - total_net, 2),
+        },
+        "nws_summary": nws_summary,
+    }
+
+
+@router.put("/preferences")
+async def update_budget_preferences(
+    body: dict,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the 50/30/20 rule percentages stored in user_preferences."""
+    from datetime import datetime
+    needs = body.get("needs", 50)
+    wants = body.get("wants", 30)
+    savings = body.get("savings", 20)
+    if abs(needs + wants + savings - 100) > 0.1:
+        raise HTTPException(status_code=400, detail="needs + wants + savings must equal 100")
+
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    if prefs:
+        prefs.default_budget_rule = {"needs": needs, "wants": wants, "savings": savings}
+        prefs.updated_at = datetime.utcnow()
+        await db.commit()
+    return {"needs": needs, "wants": wants, "savings": savings}
