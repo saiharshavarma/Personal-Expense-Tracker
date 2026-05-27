@@ -43,6 +43,64 @@ export function getCurrentMonthYear(): { month: number; year: number } {
   return { month: now.getMonth() + 1, year: now.getFullYear() }
 }
 
+// ── Review reason helper ──────────────────────────────────────────────────────
+// Returns a specific human-readable reason WHY a transaction needs review,
+// plus a color token. Used in the table and card grid instead of "Needs review".
+
+export type ReviewReason = {
+  label: string
+  color: 'red' | 'yellow' | 'blue'
+} | null
+
+export function getReviewReason(t: {
+  ai_confidence: number | null
+  ai_flags?: string[]
+  ai_category: string | null
+  category: string | null
+  source?: string
+}): ReviewReason {
+  const conf = t.ai_confidence  // 0–1 scale
+  const flags = t.ai_flags ?? []
+
+  // No category at all — highest priority
+  if (!t.category && !t.ai_category) {
+    return { label: 'Uncategorized', color: 'yellow' }
+  }
+
+  // AI has a suggestion but hasn't been applied yet
+  if (t.ai_category && !t.category) {
+    return { label: `Accept AI: ${t.ai_category}`, color: 'yellow' }
+  }
+
+  // Confidence-based reasons
+  if (conf !== null) {
+    const pct = Math.round(conf * 100)
+    if (conf < 0.75) {
+      return { label: `AI unsure — ${pct}% confident`, color: 'red' }
+    }
+    if (conf < 0.90) {
+      return { label: `Check category — ${pct}% confident`, color: 'yellow' }
+    }
+  }
+
+  // Flag-based reasons (checked after confidence)
+  if (flags.includes('large_amount')) {
+    return { label: 'Unusually large amount', color: 'yellow' }
+  }
+  if (flags.includes('work_expense')) {
+    return { label: 'Possible work expense', color: 'blue' }
+  }
+  if (flags.includes('unusual')) {
+    return { label: 'Unusual transaction', color: 'yellow' }
+  }
+  if (flags.includes('reimbursable')) {
+    return { label: 'Possible reimbursable', color: 'blue' }
+  }
+
+  // No specific reason found — stale flag, don't surface anything
+  return null
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
   let timer: ReturnType<typeof setTimeout>

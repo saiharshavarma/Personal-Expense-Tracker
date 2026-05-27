@@ -1,11 +1,10 @@
 import { motion } from 'framer-motion'
-import { Pencil, Trash2, AlertCircle, DollarSign } from 'lucide-react'
+import { Pencil, Trash2, AlertCircle, DollarSign, PenLine, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAccountsStore } from '@/store'
 import { getCategoryColor } from '@/lib/categories'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, getReviewReason } from '@/lib/utils'
 import type { Transaction } from '@/types'
 
 interface TransactionCardGridProps {
@@ -59,32 +58,54 @@ function TransactionCard({
           </span>
         </div>
 
-        {/* Description */}
-        <p className="text-sm font-medium truncate mb-1">
-          {t.description_clean ?? t.description ?? t.merchant ?? '—'}
+        {/* Paid To + Notes */}
+        <p className="text-sm font-medium truncate">
+          {t.merchant ?? t.description_clean ?? t.description ?? '—'}
         </p>
+        {t.notes ? (
+          <p className="text-xs text-muted-foreground truncate mb-1">
+            <span className="opacity-50">for</span> {t.notes}
+          </p>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs font-medium mb-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
+            <PenLine className="w-3 h-3 flex-shrink-0" />
+            Add a note
+          </span>
+        )}
 
         {/* Meta row */}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{formatDate(t.date)}</span>
           <div className="flex items-center gap-1.5">
             {acct && <span className="truncate max-w-[80px]">{acct.name}</span>}
-            <Badge
-              variant="outline"
-              className={`text-xs py-0 ${isDebit ? 'border-red-200 text-red-600 dark:text-red-400' : 'border-green-200 text-green-600 dark:text-green-400'}`}
-            >
-              {isDebit ? 'Debit' : 'Credit'}
-            </Badge>
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${
+              isDebit
+                ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+            }`}>
+              {isDebit
+                ? <><ArrowDownLeft className="w-3 h-3" />Debit</>
+                : <><ArrowUpRight className="w-3 h-3" />Credit</>}
+            </span>
           </div>
         </div>
 
         {/* Flags */}
         <div className="flex items-center gap-2 mt-2">
-          {t.needs_review && (
-            <span className="flex items-center gap-0.5 text-xs text-yellow-600 dark:text-yellow-400">
-              <AlertCircle className="w-3 h-3" /> Review
-            </span>
-          )}
+          {t.needs_review && (() => {
+            const r = getReviewReason(t)
+            if (!r) return null
+            return (
+              <span className={`flex items-center gap-0.5 text-xs ${
+                r.color === 'red'  ? 'text-red-500 dark:text-red-400' :
+                r.color === 'blue' ? 'text-blue-500 dark:text-blue-400' :
+                                     'text-amber-500 dark:text-amber-400'
+              }`}>
+                <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                {r.label}
+              </span>
+            )
+          })()}
           {t.is_reimbursable && (
             <span className="flex items-center gap-0.5 text-xs text-blue-600 dark:text-blue-400">
               <DollarSign className="w-3 h-3" /> Reimbursable

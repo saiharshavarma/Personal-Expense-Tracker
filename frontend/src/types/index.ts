@@ -70,7 +70,8 @@ export interface Transaction {
   duplicate_hash: string | null
   ai_category: string | null
   ai_subcategory: string | null
-  ai_confidence: number | null
+  ai_confidence: number | null  // 0–1 scale (e.g. 0.85 = 85%)
+  ai_flags: string[]            // e.g. ["recurring", "large_amount", "work_expense", "unusual"]
   ai_reviewed: boolean
   needs_review: boolean
   created_at: string

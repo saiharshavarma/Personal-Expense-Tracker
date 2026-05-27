@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { useTransactionsStore } from '@/store'
 import { useAccounts } from '@/hooks/useAccounts'
-import { TransactionTable } from '@/components/transactions/TransactionTable'
+import { TransactionTable, ColumnPicker, DEFAULT_VISIBLE } from '@/components/transactions/TransactionTable'
+import type { ColKey } from '@/components/transactions/TransactionTable'
 import { TransactionCardGrid } from '@/components/transactions/TransactionCardGrid'
 import { FilterPanel } from '@/components/transactions/FilterPanel'
 import { ActiveFilterChips } from '@/components/transactions/ActiveFilterChips'
@@ -34,6 +35,7 @@ export function Transactions() {
   useAccounts()
 
   const [view, setView] = useState<'table' | 'card'>('table')
+  const [cols, setCols] = useState<Record<ColKey, boolean>>(DEFAULT_VISIBLE)
   const [search, setSearch] = useState(filters.search ?? '')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -178,19 +180,24 @@ export function Transactions() {
           )}
         </Button>
 
-        <div className="ml-auto flex items-center gap-1 rounded-lg border p-1">
-          <button
-            onClick={() => setView('table')}
-            className={cn('p-1.5 rounded-md transition-colors', view === 'table' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
-          >
-            <LayoutList className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setView('card')}
-            className={cn('p-1.5 rounded-md transition-colors', view === 'card' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
-          >
-            <LayoutGrid className="w-4 h-4" />
-          </button>
+        <div className="ml-auto flex items-center gap-2">
+          {view === 'table' && (
+            <ColumnPicker cols={cols} onChange={setCols} />
+          )}
+          <div className="flex items-center gap-1 rounded-lg border p-1">
+            <button
+              onClick={() => setView('table')}
+              className={cn('p-1.5 rounded-md transition-colors', view === 'table' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setView('card')}
+              className={cn('p-1.5 rounded-md transition-colors', view === 'card' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -218,6 +225,8 @@ export function Transactions() {
             onEdit={handleEdit}
             onDelete={handleDelete}
             onCategoryUpdate={handleCategoryUpdate}
+            cols={cols}
+            onColsChange={setCols}
           />
         ) : (
           <TransactionCardGrid

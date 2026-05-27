@@ -27,6 +27,7 @@ class TransactionCreate(BaseModel):
     need_want_savings: Optional[str] = None
     fixed_variable: Optional[str] = None
     personal_work_shared: Optional[str] = None
+    merchant: Optional[str] = None
     notes: Optional[str] = None
     tags: Optional[List[str]] = None
     is_reimbursable: bool = False
@@ -50,6 +51,7 @@ class TransactionUpdate(BaseModel):
     need_want_savings: Optional[str] = None
     fixed_variable: Optional[str] = None
     personal_work_shared: Optional[str] = None
+    merchant: Optional[str] = None
     notes: Optional[str] = None
     tags: Optional[List[str]] = None
     is_reimbursable: Optional[bool] = None
@@ -100,6 +102,7 @@ def _serialize(t: Transaction) -> dict:
         "ai_category": t.ai_category,
         "ai_subcategory": t.ai_subcategory,
         "ai_confidence": float(t.ai_confidence) if t.ai_confidence else None,
+        "ai_flags": t.ai_flags or [],
         "ai_reviewed": t.ai_reviewed,
         "needs_review": t.needs_review,
         "created_at": t.created_at.isoformat() if t.created_at else None,
@@ -303,7 +306,7 @@ async def bulk_action(
                 "category", "subcategory", "need_want_savings", "fixed_variable",
                 "personal_work_shared", "is_reimbursable", "reimbursement_source",
                 "reimbursement_status", "expected_reimbursement", "notes",
-                "needs_review", "ai_reviewed", "is_recurring",
+                "merchant", "needs_review", "ai_reviewed", "is_recurring",
             }
             for field, value in body.payload.items():
                 if field in allowed and hasattr(t, field):
