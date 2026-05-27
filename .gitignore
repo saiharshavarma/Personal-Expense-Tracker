@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+.DS_Store
+node_modules/
+dist/
+.vite/
+*.egg-info/
+.pytest_cache/
+postgres/data/
+backend/alembic/versions/

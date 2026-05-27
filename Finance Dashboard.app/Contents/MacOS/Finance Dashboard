@@ -1,0 +1,12 @@
+#!/bin/bash
+# Finance Dashboard launcher
+# Double-click this app to start the dashboard in a Terminal window.
+
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+
+osascript <<EOF
+tell application "Terminal"
+  activate
+  do script "cd '$DIR' && ./start.sh"
+end tell
+EOF
