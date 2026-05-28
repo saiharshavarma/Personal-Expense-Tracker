@@ -180,8 +180,21 @@ async def _ingest_file(
             t.ai_flags = r.flags or []
             t.merchant = r.merchant_clean or None
 
+            # Always apply extended fields so the review queue shows them pre-filled
+            if r.fixed_variable:
+                t.fixed_variable = r.fixed_variable
+            if r.personal_work_shared:
+                t.personal_work_shared = r.personal_work_shared
+            if r.is_reimbursable:
+                t.is_reimbursable = r.is_reimbursable
+                t.reimbursement_status = "pending"
+            if r.is_recurring:
+                t.is_recurring = r.is_recurring
+            if r.suggested_tags:
+                t.tags = r.suggested_tags
+
             if r.confidence >= AUTO_THRESHOLD:
-                # High confidence: auto-apply, no review needed
+                # High confidence: auto-apply category fields, no review needed
                 t.category = r.category
                 t.subcategory = r.subcategory
                 t.need_want_savings = r.need_want_savings
@@ -358,6 +371,12 @@ async def get_review_queue(
             "subcategory": t.subcategory,
             "merchant": t.merchant,
             "ai_flags": t.ai_flags or [],
+            "need_want_savings": t.need_want_savings,
+            "fixed_variable": t.fixed_variable,
+            "personal_work_shared": t.personal_work_shared,
+            "is_reimbursable": t.is_reimbursable,
+            "is_recurring": t.is_recurring,
+            "tags": t.tags or [],
             "batch_id": str(t.import_batch_id) if t.import_batch_id else None,
         }
         for t in txns
@@ -398,6 +417,17 @@ async def review_queue_action(
                 t.merchant = body["merchant_clean"]
             if body.get("need_want_savings"):
                 t.need_want_savings = body["need_want_savings"]
+            if body.get("fixed_variable") is not None:
+                t.fixed_variable = body["fixed_variable"] or None
+            if body.get("personal_work_shared") is not None:
+                t.personal_work_shared = body["personal_work_shared"] or None
+            if "is_reimbursable" in body:
+                t.is_reimbursable = bool(body["is_reimbursable"])
+                t.reimbursement_status = "pending" if t.is_reimbursable else "not_reimbursable"
+            if "is_recurring" in body:
+                t.is_recurring = bool(body["is_recurring"])
+            if "tags" in body and isinstance(body["tags"], list):
+                t.tags = body["tags"]
 
             # Learn: save correction as merchant rule
             if t.description:
@@ -409,6 +439,11 @@ async def review_queue_action(
                     merchant_clean=body.get("merchant_clean") or "",
                     db=db,
                     need_want_savings=body.get("need_want_savings"),
+                    fixed_variable=body.get("fixed_variable") or None,
+                    personal_work_shared=body.get("personal_work_shared") or None,
+                    is_reimbursable=bool(body.get("is_reimbursable", False)),
+                    is_recurring=bool(body.get("is_recurring", False)),
+                    tags=body.get("tags") or [],
                 )
         else:
             # Accept: apply AI suggestion

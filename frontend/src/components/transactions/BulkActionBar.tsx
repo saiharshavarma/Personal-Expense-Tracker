@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, Tag, DollarSign, X, ChevronDown } from 'lucide-react'
+import { Trash2, Tag, DollarSign, X, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -10,7 +11,7 @@ import {
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu'
 import { useTransactionsStore } from '@/store'
-import { ALL_CATEGORIES } from '@/lib/categories'
+import { ALL_CATEGORIES, getSubcategories } from '@/lib/categories'
 
 interface BulkActionBarProps {
   selectedIds: string[]
@@ -21,9 +22,12 @@ interface BulkActionBarProps {
 export function BulkActionBar({ selectedIds, onClear, onRefetch }: BulkActionBarProps) {
   const { bulkAction } = useTransactionsStore()
   const count = selectedIds.length
+  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null)
 
-  const handleCategorize = async (category: string) => {
-    await bulkAction(selectedIds, { action: 'categorize', payload: { category } })
+  const handleCategorize = async (category: string, subcategory?: string) => {
+    const payload: Record<string, string> = { category }
+    if (subcategory) payload.subcategory = subcategory
+    await bulkAction(selectedIds, { action: 'categorize', payload })
     onRefetch()
     onClear()
   }
@@ -57,8 +61,8 @@ export function BulkActionBar({ selectedIds, onClear, onRefetch }: BulkActionBar
 
             <div className="w-px h-4 bg-border" />
 
-            {/* Categorize */}
-            <DropdownMenu>
+            {/* Categorize — two-level category + subcategory */}
+            <DropdownMenu onOpenChange={() => setHoveredCategory(null)}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm">
                   <Tag className="w-4 h-4" />
@@ -66,14 +70,39 @@ export function BulkActionBar({ selectedIds, onClear, onRefetch }: BulkActionBar
                   <ChevronDown className="w-3 h-3" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="max-h-64 overflow-y-auto">
-                <DropdownMenuLabel className="text-xs">Assign Category</DropdownMenuLabel>
+              <DropdownMenuContent align="center" className="max-h-80 overflow-y-auto w-64">
+                <DropdownMenuLabel className="text-xs">Assign Category + Subcategory</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {ALL_CATEGORIES.map((cat) => (
-                  <DropdownMenuItem key={cat} onClick={() => handleCategorize(cat)}>
-                    {cat}
-                  </DropdownMenuItem>
-                ))}
+                {ALL_CATEGORIES.map((cat) => {
+                  const subcats = getSubcategories(cat)
+                  const isHovered = hoveredCategory === cat
+                  return (
+                    <div key={cat}>
+                      <DropdownMenuItem
+                        className="flex items-center justify-between cursor-pointer"
+                        onMouseEnter={() => setHoveredCategory(cat)}
+                        onClick={() => handleCategorize(cat)}
+                      >
+                        <span>{cat}</span>
+                        {subcats.length > 0 && <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+                      </DropdownMenuItem>
+                      {/* Subcategory list — shown on hover */}
+                      {isHovered && subcats.length > 0 && (
+                        <div className="pl-3 border-l border-primary/20 ml-2 mb-1">
+                          {subcats.map((sub) => (
+                            <DropdownMenuItem
+                              key={sub}
+                              className="text-xs text-muted-foreground hover:text-foreground"
+                              onClick={() => handleCategorize(cat, sub)}
+                            >
+                              {sub}
+                            </DropdownMenuItem>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </DropdownMenuContent>
             </DropdownMenu>
 

@@ -1,6 +1,6 @@
 import re
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,9 +26,11 @@ class RulesEngine:
                     "subcategory": rule.subcategory,
                     "merchant_clean": rule.merchant_clean,
                     "need_want_savings": rule.need_want_savings,
+                    "fixed_variable": rule.fixed_variable,
                     "is_reimbursable": rule.is_reimbursable,
                     "personal_work_shared": rule.personal_work_shared,
                     "is_recurring": rule.is_recurring,
+                    "tags": rule.tags or [],
                     "confidence": float(rule.confidence),
                     "rule_id": str(rule.id),
                 }
@@ -58,6 +60,11 @@ class RulesEngine:
         merchant_clean: str,
         db: AsyncSession,
         need_want_savings: Optional[str] = None,
+        fixed_variable: Optional[str] = None,
+        personal_work_shared: Optional[str] = None,
+        is_reimbursable: bool = False,
+        is_recurring: bool = False,
+        tags: Optional[List[str]] = None,
     ) -> None:
         """
         Save a user correction as a merchant rule so future matches auto-apply.
@@ -85,6 +92,14 @@ class RulesEngine:
             existing.merchant_clean = merchant_clean
             if need_want_savings:
                 existing.need_want_savings = need_want_savings
+            if fixed_variable is not None:
+                existing.fixed_variable = fixed_variable
+            if personal_work_shared is not None:
+                existing.personal_work_shared = personal_work_shared
+            existing.is_reimbursable = is_reimbursable
+            existing.is_recurring = is_recurring
+            if tags is not None:
+                existing.tags = tags
             existing.times_applied = (existing.times_applied or 0) + 1
             existing.confidence = Decimal("1.000")
             existing.updated_at = datetime.utcnow()
@@ -96,6 +111,11 @@ class RulesEngine:
                 category=category,
                 subcategory=subcategory,
                 need_want_savings=need_want_savings,
+                fixed_variable=fixed_variable,
+                personal_work_shared=personal_work_shared,
+                is_reimbursable=is_reimbursable,
+                is_recurring=is_recurring,
+                tags=tags or [],
                 confidence=Decimal("1.000"),
                 times_applied=1,
                 times_overridden=0,

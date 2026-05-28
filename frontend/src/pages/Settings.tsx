@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
-  Database, Download, Shield, ChevronRight, Sun, Moon, Check,
+  Database, Download, Shield, ChevronRight, Sun, Moon, Check, X,
   Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save,
   Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw, Trash2, Plus,
+  Mail, Bell,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -19,8 +20,9 @@ import { useUIStore } from '@/store/ui'
 import { useAuthStore, usePreferencesStore } from '@/store'
 import { api } from '@/utils/apiClient'
 import { AccountsModal } from '@/components/accounts/AccountsModal'
+import { CATEGORY_MAP } from '@/lib/categories'
 
-type SettingsTab = 'accounts' | 'categories' | 'ai' | 'ios' | 'appearance' | 'backup' | 'security'
+type SettingsTab = 'accounts' | 'categories' | 'ai' | 'ios' | 'appearance' | 'notifications' | 'backup' | 'security' | 'health'
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'accounts', label: 'Accounts & Income', icon: CreditCard },
@@ -28,8 +30,10 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ classN
   { id: 'ai', label: 'AI Configuration', icon: Brain },
   { id: 'ios', label: 'iOS Shortcut', icon: Smartphone },
   { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'notifications', label: 'Email Reports', icon: Mail },
   { id: 'backup', label: 'Backup & Export', icon: Database },
   { id: 'security', label: 'Security', icon: Shield },
+  { id: 'health', label: 'System Health', icon: Settings2 },
 ]
 
 function AccountsTab() {
@@ -94,6 +98,83 @@ const ALL_CATEGORIES_SETTINGS = [
   'Health & Medical', 'Travel', 'Utilities', 'Housing', 'Education',
   'Personal Care', 'Business', 'Investments', 'Income', 'Transfers', 'Other',
 ]
+
+function BudgetRuleEditor() {
+  const [nws, setNws] = useState({ needs: 50, wants: 30, savings: 20 })
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    api.get('/preferences').then(r => {
+      const rule = r.data.default_budget_rule ?? {}
+      setNws({ needs: rule.needs ?? 50, wants: rule.wants ?? 30, savings: rule.savings ?? 20 })
+    }).catch(() => {})
+  }, [])
+
+  const total = nws.needs + nws.wants + nws.savings
+
+  const handleSave = async () => {
+    if (Math.abs(total - 100) > 0.1) { setErr('Must add up to 100%'); return }
+    setSaving(true); setErr('')
+    try {
+      await api.put('/budgets/preferences', nws)
+      setMsg('Saved!'); setEditing(false)
+      setTimeout(() => setMsg(''), 2500)
+    } catch { setErr('Failed to save') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base">Budget Rule ({nws.needs}/{nws.wants}/{nws.savings})</CardTitle>
+            <CardDescription>Customize your Needs / Wants / Savings target percentages</CardDescription>
+          </div>
+          {!editing && (
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              Configure
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      {editing && (
+        <CardContent className="space-y-3">
+          {[
+            { key: 'needs' as const, label: 'Needs (%)' },
+            { key: 'wants' as const, label: 'Wants (%)' },
+            { key: 'savings' as const, label: 'Savings (%)' },
+          ].map(({ key, label }) => (
+            <div key={key} className="flex items-center gap-3">
+              <Label className="w-24 text-sm shrink-0">{label}</Label>
+              <Input
+                type="number" min="0" max="100" step="5"
+                value={nws[key]}
+                onChange={e => setNws(n => ({ ...n, [key]: parseFloat(e.target.value) || 0 }))}
+                className="w-24 h-8 text-sm"
+              />
+              <span className={`text-xs font-medium ${Math.abs(total - 100) < 0.1 ? 'text-green-500' : 'text-destructive'}`}>
+                Total: {total}%
+              </span>
+            </div>
+          ))}
+          {err && <p className="text-xs text-destructive flex items-center gap-1"><AlertCircle className="w-3 h-3" />{err}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr('') }}>Cancel</Button>
+          </div>
+          {msg && <p className="text-xs text-green-500 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{msg}</p>}
+        </CardContent>
+      )}
+    </Card>
+  )
+}
 
 function CategoriesTab() {
   const [rules, setRules] = useState<MerchantRule[]>([])
@@ -306,23 +387,218 @@ function CategoriesTab() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Budget Categories</CardTitle>
-          <CardDescription>Customize the 50/30/20 rule assignments per category</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <div className="space-y-2 py-4">
-            {['Needs (50%)', 'Wants (30%)', 'Savings (20%)'].map((group) => (
-              <div key={group} className="flex items-center justify-between py-2 border-b last:border-0">
-                <span className="text-sm font-medium">{group}</span>
-                <Button size="sm" variant="ghost" className="h-7 text-xs">Configure</Button>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <BudgetRuleEditor />
+      <AllCategoriesCard />
     </div>
+  )
+}
+
+// ── Full Category Taxonomy Editor ─────────────────────────────────────────────
+// Shows ALL categories (built-in + custom), drag-to-reorder subcategories,
+// add/remove subcategories on any category, add new top-level categories.
+
+function AllCategoriesCard() {
+  // `overrides` mirrors dashboard_layout.custom_categories
+  // It only stores entries that differ from CATEGORY_MAP (or are entirely new).
+  const [overrides, setOverrides] = useState<Record<string, string[]>>({})
+  const [expandedCat, setExpandedCat] = useState<string | null>(null)
+  const [newSub, setNewSub] = useState<Record<string, string>>({})
+  const [newCatName, setNewCatName] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [layoutCache, setLayoutCache] = useState<Record<string, unknown>>({})
+
+  useEffect(() => {
+    api.get('/preferences').then(r => {
+      const layout = r.data.dashboard_layout ?? {}
+      setLayoutCache(layout)
+      setOverrides(layout.custom_categories ?? {})
+    }).catch(() => {})
+  }, [])
+
+  const persist = async (next: Record<string, string[]>) => {
+    setSaving(true)
+    try {
+      await api.put('/preferences', {
+        dashboard_layout: { ...layoutCache, custom_categories: next }
+      })
+      setLayoutCache(l => ({ ...l, custom_categories: next }))
+    } catch { /* ignore */ }
+    finally { setSaving(false) }
+  }
+
+  // Effective subcategories for a category: override beats built-in
+  const effectiveSubs = (cat: string): string[] =>
+    overrides[cat] !== undefined ? overrides[cat] : (CATEGORY_MAP[cat] ?? [])
+
+  // All categories to display: built-in order first, then any purely-custom ones
+  const builtInCats = Object.keys(CATEGORY_MAP)
+  const customOnlyCats = Object.keys(overrides).filter(c => !(c in CATEGORY_MAP))
+  const allCats = [...builtInCats, ...customOnlyCats]
+
+  const isModified = (cat: string) => cat in overrides
+  const isCustomOnly = (cat: string) => !(cat in CATEGORY_MAP)
+
+  const updateSubs = (cat: string, subs: string[]) => {
+    const next = { ...overrides, [cat]: subs }
+    setOverrides(next); persist(next)
+  }
+
+  const resetToDefault = (cat: string) => {
+    const next = { ...overrides }; delete next[cat]
+    setOverrides(next); persist(next)
+  }
+
+  const deleteCategory = (cat: string) => {
+    const next = { ...overrides }; delete next[cat]
+    setOverrides(next); persist(next)
+  }
+
+  const addSub = (cat: string) => {
+    const sub = (newSub[cat] ?? '').trim()
+    if (!sub) return
+    const current = effectiveSubs(cat)
+    if (current.includes(sub)) return
+    updateSubs(cat, [...current, sub])
+    setNewSub(s => ({ ...s, [cat]: '' }))
+  }
+
+  const removeSub = (cat: string, sub: string) => {
+    updateSubs(cat, effectiveSubs(cat).filter(s => s !== sub))
+  }
+
+  const addCategory = () => {
+    const name = newCatName.trim()
+    if (!name || allCats.includes(name)) return
+    const next = { ...overrides, [name]: [] }
+    setOverrides(next); persist(next); setNewCatName('')
+    setExpandedCat(name)
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-base">Categories & Subcategories</CardTitle>
+            <CardDescription>
+              Edit any category's subcategories. Drag chips to reorder. Built-in categories can be customised or reset.
+            </CardDescription>
+          </div>
+          {saving && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Add new top-level category */}
+        <div className="flex gap-2">
+          <Input
+            placeholder="Add a new category…"
+            value={newCatName}
+            onChange={e => setNewCatName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addCategory()}
+            className="h-8 text-sm"
+          />
+          <Button size="sm" onClick={addCategory} disabled={!newCatName.trim()}>
+            <Plus className="w-3.5 h-3.5" /> Add
+          </Button>
+        </div>
+
+        {allCats.map(cat => {
+          const subs = effectiveSubs(cat)
+          const open = expandedCat === cat
+          return (
+            <div key={cat} className="rounded-lg border overflow-hidden">
+              {/* Header row */}
+              <div
+                className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-accent/40 transition-colors"
+                onClick={() => setExpandedCat(open ? null : cat)}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Tag className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm font-medium truncate">{cat}</span>
+                  {isCustomOnly(cat) && (
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 text-blue-600 border-blue-300">custom</Badge>
+                  )}
+                  {isModified(cat) && !isCustomOnly(cat) && (
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 text-amber-600 border-amber-300">modified</Badge>
+                  )}
+                  <span className="text-xs text-muted-foreground">{subs.length} subcategories</span>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {isModified(cat) && !isCustomOnly(cat) && (
+                    <Button
+                      size="sm" variant="ghost"
+                      className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={e => { e.stopPropagation(); resetToDefault(cat) }}
+                      title="Reset to built-in defaults"
+                    >
+                      Reset
+                    </Button>
+                  )}
+                  {isCustomOnly(cat) && (
+                    <Button
+                      size="sm" variant="ghost"
+                      className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={e => { e.stopPropagation(); deleteCategory(cat) }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  )}
+                  <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+                </div>
+              </div>
+
+              {/* Expanded: drag-to-reorder subcategories */}
+              {open && (
+                <div className="px-3 pb-3 pt-2 border-t bg-muted/20 space-y-2">
+                  <p className="text-[10px] text-muted-foreground">Drag chips to reorder · click × to remove</p>
+                  <Reorder.Group
+                    axis="x"
+                    values={subs}
+                    onReorder={(newOrder) => updateSubs(cat, newOrder)}
+                    className="flex flex-wrap gap-1.5 min-h-7"
+                  >
+                    {subs.map(sub => (
+                      <Reorder.Item
+                        key={sub}
+                        value={sub}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-background border text-xs cursor-grab active:cursor-grabbing select-none shadow-sm"
+                        whileDrag={{ scale: 1.08, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 10 }}
+                      >
+                        <span>{sub}</span>
+                        <button
+                          onPointerDown={e => e.stopPropagation()}
+                          onClick={() => removeSub(cat, sub)}
+                          className="hover:text-destructive transition-colors"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </Reorder.Item>
+                    ))}
+                    {subs.length === 0 && (
+                      <span className="text-xs text-muted-foreground italic">No subcategories yet — add one below</span>
+                    )}
+                  </Reorder.Group>
+
+                  {/* Add subcategory */}
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="New subcategory…"
+                      value={newSub[cat] ?? ''}
+                      onChange={e => setNewSub(s => ({ ...s, [cat]: e.target.value }))}
+                      onKeyDown={e => e.key === 'Enter' && addSub(cat)}
+                      className="h-7 text-xs"
+                    />
+                    <Button size="sm" className="h-7 text-xs" onClick={() => addSub(cat)}>
+                      <Plus className="w-3 h-3" /> Add
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -625,8 +901,27 @@ function IOSTab() {
   )
 }
 
+const CURRENCIES = [
+  { code: 'USD', label: 'US Dollar ($)' },
+  { code: 'EUR', label: 'Euro (€)' },
+  { code: 'GBP', label: 'British Pound (£)' },
+  { code: 'CAD', label: 'Canadian Dollar (C$)' },
+  { code: 'AUD', label: 'Australian Dollar (A$)' },
+  { code: 'JPY', label: 'Japanese Yen (¥)' },
+  { code: 'INR', label: 'Indian Rupee (₹)' },
+  { code: 'CNY', label: 'Chinese Yuan (¥)' },
+  { code: 'CHF', label: 'Swiss Franc (CHF)' },
+  { code: 'MXN', label: 'Mexican Peso (MX$)' },
+  { code: 'BRL', label: 'Brazilian Real (R$)' },
+  { code: 'SGD', label: 'Singapore Dollar (S$)' },
+  { code: 'NZD', label: 'New Zealand Dollar (NZ$)' },
+  { code: 'SEK', label: 'Swedish Krona (kr)' },
+  { code: 'NOK', label: 'Norwegian Krone (kr)' },
+]
+
 function AppearanceTab() {
   const { theme, toggleTheme } = useUIStore()
+  const { prefs, update } = usePreferencesStore()
 
   return (
     <div className="space-y-4">
@@ -654,6 +949,27 @@ function AppearanceTab() {
               {theme === id && <Check className="w-4 h-4 text-primary" />}
             </button>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Currency</CardTitle>
+          <CardDescription>All amounts displayed using this currency symbol</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <select
+            value={prefs?.currency ?? 'USD'}
+            onChange={e => update({ currency: e.target.value })}
+            className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          >
+            {CURRENCIES.map(c => (
+              <option key={c.code} value={c.code}>{c.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground mt-2">
+            Preview: {new Intl.NumberFormat('en-US', { style: 'currency', currency: prefs?.currency ?? 'USD' }).format(1234.56)}
+          </p>
         </CardContent>
       </Card>
     </div>
@@ -1036,14 +1352,348 @@ function SecurityTab() {
   )
 }
 
+// ── System Health Tab ──────────────────────────────────────────────────────────
+
+function HealthTab() {
+  const [health, setHealth] = useState<{ status: string; version: string } | null>(null)
+  const [prefs, setPrefs] = useState<Record<string, unknown>>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      // /health is not under /api, so we use a direct fetch through the proxy alias /api/health
+      api.get('/health').then(r => setHealth(r.data)).catch(() => {}),
+      api.get('/preferences').then(r => setPrefs(r.data)).catch(() => {}),
+    ]).finally(() => setLoading(false))
+  }, [])
+
+  const checks = [
+    {
+      label: 'API Server',
+      ok: health?.status === 'ok',
+      detail: health ? `v${health.version} — online` : 'Unreachable',
+      category: 'Infrastructure',
+    },
+    {
+      label: 'Authentication',
+      ok: true,
+      detail: prefs.webauthn_enrolled ? 'Biometric (Touch ID / WebAuthn) enrolled' : 'Password-based login active',
+      warn: !prefs.webauthn_enrolled,
+      category: 'Security',
+    },
+    {
+      label: 'AI API Key',
+      ok: !!(prefs.anthropic_api_key_set || prefs.openai_api_key_set),
+      detail: prefs.anthropic_api_key_set
+        ? `Anthropic configured (…${prefs.anthropic_api_key_preview})`
+        : prefs.openai_api_key_set
+          ? `OpenAI configured (…${prefs.openai_api_key_preview})`
+          : 'No key — AI categorization disabled (add one in AI tab)',
+      warn: !(prefs.anthropic_api_key_set || prefs.openai_api_key_set),
+      category: 'AI',
+    },
+    {
+      label: 'Auto-Backup',
+      ok: true,
+      detail: prefs.backup_to_icloud
+        ? `Enabled → ${prefs.backup_path ?? '~/Finance/Backups'}`
+        : 'Disabled — enable in Backup tab for peace of mind',
+      warn: !prefs.backup_to_icloud,
+      category: 'Data Safety',
+    },
+    {
+      label: 'Local Storage',
+      ok: true,
+      detail: 'All financial data stored locally — never uploaded to external servers',
+      category: 'Privacy',
+    },
+    {
+      label: 'Encryption at Rest',
+      ok: true,
+      detail: 'PostgreSQL volume on your local machine, no cloud sync',
+      category: 'Data Safety',
+    },
+    {
+      label: 'AI Insights',
+      ok: true,
+      detail: prefs.ai_insights_opt_in
+        ? 'Opted in — aggregated category totals sent to AI for insights'
+        : 'Privacy mode — no spending data sent to AI (opt in via AI tab)',
+      warn: false,
+      category: 'Privacy',
+    },
+  ]
+
+  const grouped = checks.reduce<Record<string, typeof checks>>((acc, c) => {
+    ;(acc[c.category] = acc[c.category] ?? []).push(c)
+    return acc
+  }, {})
+
+  if (loading) return (
+    <div className="flex justify-center py-16">
+      <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      {Object.entries(grouped).map(([group, items]) => (
+        <Card key={group}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">{group}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {items.map((c) => (
+              <div key={c.label} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div className="flex items-center gap-3">
+                  {c.ok && !c.warn ? (
+                    <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                  ) : c.warn ? (
+                    <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+                  )}
+                  <div>
+                    <p className="text-sm font-medium">{c.label}</p>
+                    <p className="text-xs text-muted-foreground">{c.detail}</p>
+                  </div>
+                </div>
+                <Badge
+                  variant="secondary"
+                  className={c.ok && !c.warn
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    : c.warn
+                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                      : 'bg-destructive/10 text-destructive'}
+                >
+                  {c.ok && !c.warn ? 'OK' : c.warn ? 'Warning' : 'Error'}
+                </Badge>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+// ── Email Reports / Notifications Tab ────────────────────────────────────────
+
+const DAY_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
+
+interface EmailCfg {
+  enabled: boolean
+  report_email: string
+  report_day: number
+  reminder_enabled: boolean
+  reminder_day: number
+  smtp_host: string
+  smtp_port: number
+  smtp_user: string
+  smtp_password: string
+  use_tls: boolean
+}
+
+const DEFAULT_EMAIL_CFG: EmailCfg = {
+  enabled: false,
+  report_email: '',
+  report_day: 1,
+  reminder_enabled: false,
+  reminder_day: 28,
+  smtp_host: 'smtp.gmail.com',
+  smtp_port: 587,
+  smtp_user: '',
+  smtp_password: '',
+  use_tls: true,
+}
+
+function NotificationsTab() {
+  const [cfg, setCfg] = useState<EmailCfg>(DEFAULT_EMAIL_CFG)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [showPw, setShowPw] = useState(false)
+
+  useEffect(() => {
+    api.get('/email-reports/settings')
+      .then(r => setCfg({ ...DEFAULT_EMAIL_CFG, ...r.data, smtp_password: '' }))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const set = (patch: Partial<EmailCfg>) => setCfg(c => ({ ...c, ...patch }))
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api.put('/email-reports/settings', cfg)
+      setTestResult({ ok: true, msg: 'Settings saved.' })
+    } catch { setTestResult({ ok: false, msg: 'Save failed.' }) }
+    finally { setSaving(false); setTimeout(() => setTestResult(null), 4000) }
+  }
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await api.post<{ to: string }>('/email-reports/test')
+      setTestResult({ ok: true, msg: `Test email sent to ${r.data.to}` })
+    } catch (e: unknown) {
+      const ex = e as { response?: { data?: { detail?: string } } }
+      setTestResult({ ok: false, msg: ex?.response?.data?.detail ?? 'Test failed — check SMTP settings' })
+    } finally { setTesting(false) }
+  }
+
+  if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+
+  return (
+    <div className="space-y-4">
+      {/* Monthly Report */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Mail className="w-4 h-4" /> Monthly Finance Report
+              </CardTitle>
+              <CardDescription>Receive a spending summary email at the start of each month</CardDescription>
+            </div>
+            <Switch checked={cfg.enabled} onCheckedChange={v => set({ enabled: v })} />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>Recipient email</Label>
+              <Input value={cfg.report_email} onChange={e => set({ report_email: e.target.value })} placeholder="you@example.com" type="email" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Send on day</Label>
+              <select
+                value={cfg.report_day}
+                onChange={e => set({ report_day: Number(e.target.value) })}
+                className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+              >
+                {DAY_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <p className="text-xs text-muted-foreground">Day of month (1–28)</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Upload Reminder */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Bell className="w-4 h-4" /> Expense Upload Reminder
+              </CardTitle>
+              <CardDescription>Get nudged to upload last month's bank statements</CardDescription>
+            </div>
+            <Switch checked={cfg.reminder_enabled} onCheckedChange={v => set({ reminder_enabled: v })} />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>Remind on day</Label>
+              <select
+                value={cfg.reminder_day}
+                onChange={e => set({ reminder_day: Number(e.target.value) })}
+                className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+              >
+                {DAY_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <p className="text-xs text-muted-foreground">Day of month (1–28)</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* SMTP Config */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">SMTP Configuration</CardTitle>
+          <CardDescription>
+            For Gmail: use <strong>smtp.gmail.com</strong>, port <strong>587</strong>, and an{' '}
+            <a href="https://support.google.com/accounts/answer/185833" target="_blank" rel="noreferrer" className="underline text-blue-500">App Password</a>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label>SMTP host</Label>
+              <Input value={cfg.smtp_host} onChange={e => set({ smtp_host: e.target.value })} placeholder="smtp.gmail.com" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Port</Label>
+              <Input type="number" value={cfg.smtp_port} onChange={e => set({ smtp_port: Number(e.target.value) })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Username / email</Label>
+              <Input value={cfg.smtp_user} onChange={e => set({ smtp_user: e.target.value })} placeholder="you@gmail.com" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Password / App Password</Label>
+              <div className="relative">
+                <Input
+                  type={showPw ? 'text' : 'password'}
+                  value={cfg.smtp_password}
+                  onChange={e => set({ smtp_password: e.target.value })}
+                  placeholder="Leave blank to keep existing"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw(p => !p)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch id="tls" checked={cfg.use_tls} onCheckedChange={v => set({ use_tls: v })} />
+            <Label htmlFor="tls" className="cursor-pointer">Use STARTTLS (recommended)</Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3">
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Save Settings
+        </Button>
+        <Button variant="outline" onClick={handleTest} disabled={testing}>
+          {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+          Send Test Email
+        </Button>
+        {testResult && (
+          <span className={`text-sm flex items-center gap-1 ${testResult.ok ? 'text-green-600' : 'text-destructive'}`}>
+            {testResult.ok ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            {testResult.msg}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const TAB_CONTENT: Record<SettingsTab, React.ComponentType> = {
   accounts: AccountsTab,
   categories: CategoriesTab,
   ai: AITab,
   ios: IOSTab,
   appearance: AppearanceTab,
+  notifications: NotificationsTab,
   backup: BackupTab,
   security: SecurityTab,
+  health: HealthTab,
 }
 
 export function Settings() {

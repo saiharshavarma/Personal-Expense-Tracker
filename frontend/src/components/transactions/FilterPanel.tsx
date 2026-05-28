@@ -431,6 +431,41 @@ export function FilterPanel({ open, filters, onChange, onReset }: FilterPanelPro
               </div>
             </div>
 
+            {/* ── Sort row ── */}
+            <div className="px-5 py-3 border-b grid grid-cols-2 gap-5">
+              <div>
+                <SectionLabel>Sort by</SectionLabel>
+                <Select
+                  value={local.sort_by ?? 'date'}
+                  onValueChange={(v) => set({ sort_by: v })}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="date">Date</SelectItem>
+                    <SelectItem value="amount">Amount</SelectItem>
+                    <SelectItem value="category">Category</SelectItem>
+                    <SelectItem value="subcategory">Subcategory</SelectItem>
+                    <SelectItem value="merchant">Merchant</SelectItem>
+                    <SelectItem value="account_id">Account</SelectItem>
+                    <SelectItem value="need_want_savings">Need / Want</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <SectionLabel>Sort direction</SectionLabel>
+                <PillGroup
+                  value={local.sort_dir ?? 'desc'}
+                  options={[
+                    { value: 'asc', label: '↑ Asc' },
+                    { value: 'desc', label: '↓ Desc' },
+                  ]}
+                  onChange={(v) => set({ sort_dir: (v ?? 'desc') as 'asc' | 'desc' })}
+                />
+              </div>
+            </div>
+
             {/* ── Footer ── */}
             <div className="px-5 py-3 flex items-center justify-between">
               <button

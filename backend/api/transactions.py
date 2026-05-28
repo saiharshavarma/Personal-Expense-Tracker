@@ -312,12 +312,41 @@ async def update_transaction(
     t = await db.get(Transaction, transaction_id)
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    for k, v in body.model_dump(exclude_none=True).items():
+
+    updates = body.model_dump(exclude_none=True)
+    for k, v in updates.items():
         if hasattr(t, k):
             setattr(t, k, v)
     t.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(t)
+
+    # If any categorization field was explicitly edited, teach the rules engine
+    _LEARNING_FIELDS = {
+        "category", "subcategory", "merchant", "need_want_savings",
+        "fixed_variable", "personal_work_shared", "is_reimbursable",
+        "is_recurring", "tags",
+    }
+    if t.description and _LEARNING_FIELDS.intersection(updates):
+        try:
+            from services.ai.rules_engine import RulesEngine
+            await RulesEngine().record_correction(
+                description=t.description,
+                category=t.category or "",
+                subcategory=t.subcategory or "",
+                merchant_clean=t.merchant or "",
+                db=db,
+                need_want_savings=t.need_want_savings,
+                fixed_variable=t.fixed_variable,
+                personal_work_shared=t.personal_work_shared,
+                is_reimbursable=bool(t.is_reimbursable),
+                is_recurring=bool(t.is_recurring),
+                tags=t.tags or [],
+            )
+            await db.commit()
+        except Exception:
+            pass  # Learning failure should never break the save
+
     return _serialize(t)
 
 
@@ -350,7 +379,7 @@ async def bulk_action(
         if body.action == "delete":
             await db.delete(t)
         elif body.action == "categorize":
-            for field in ("category", "subcategory", "need_want_savings"):
+            for field in ("category", "subcategory", "need_want_savings", "fixed_variable", "personal_work_shared"):
                 if field in body.payload:
                     setattr(t, field, body.payload[field])
             t.updated_at = datetime.utcnow()

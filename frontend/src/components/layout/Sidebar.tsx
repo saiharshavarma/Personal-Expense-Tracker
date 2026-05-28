@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, ArrowLeftRight, Upload, BarChart3, Target,
   Receipt, RefreshCw, Plane, MessageSquare, BrainCircuit, Settings,
-  ChevronsLeft, ChevronsRight, Moon, Sun, LogOut,
+  ChevronsLeft, ChevronsRight, Moon, Sun, LogOut, Wallet,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUIStore, useAuthStore } from '@/store'
@@ -86,6 +86,11 @@ export function Sidebar() {
       >
         {/* Header */}
         <div className={cn('flex items-center h-16 px-3 border-b', sidebarCollapsed ? 'justify-center' : 'justify-between px-4')}>
+          {sidebarCollapsed && (
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+              <Wallet className="w-4 h-4 text-white" />
+            </div>
+          )}
           <AnimatePresence>
             {!sidebarCollapsed && (
               <motion.div
@@ -94,10 +99,10 @@ export function Sidebar() {
                 exit={{ opacity: 0 }}
                 className="flex items-center gap-2 min-w-0"
               >
-                <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-                  <span className="text-primary-foreground text-xs font-bold">F</span>
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+                  <Wallet className="w-4 h-4 text-white" />
                 </div>
-                <span className="font-semibold text-sm truncate">Finance</span>
+                <span className="font-semibold text-sm truncate bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent dark:from-blue-400 dark:to-indigo-400">Fintrack</span>
               </motion.div>
             )}
           </AnimatePresence>

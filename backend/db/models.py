@@ -216,12 +216,13 @@ class Transaction(Base):
 # ============================================================
 class Budget(Base):
     __tablename__ = "budgets"
-    __table_args__ = (UniqueConstraint("month", "year", "category"),)
+    __table_args__ = (UniqueConstraint("month", "year", "category", "subcategory"),)
 
     id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=_uuid)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
+    subcategory: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     budget_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     needs_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     wants_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
@@ -263,9 +264,11 @@ class MerchantRule(Base):
     category: Mapped[Optional[str]] = mapped_column(String(100))
     subcategory: Mapped[Optional[str]] = mapped_column(String(100))
     need_want_savings: Mapped[Optional[str]] = mapped_column(String(20))
+    fixed_variable: Mapped[Optional[str]] = mapped_column(String(20))
     is_reimbursable: Mapped[Optional[bool]] = mapped_column(Boolean)
     personal_work_shared: Mapped[Optional[str]] = mapped_column(String(20))
     is_recurring: Mapped[Optional[bool]] = mapped_column(Boolean)
+    tags = sa.Column(ARRAY(Text()), nullable=True)
     confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), default=Decimal("1.0"))
     times_applied: Mapped[int] = mapped_column(Integer, default=0)
     times_overridden: Mapped[int] = mapped_column(Integer, default=0)
@@ -294,6 +297,7 @@ class UserPreferences(Base):
     backup_to_icloud: Mapped[bool] = mapped_column(Boolean, default=True)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     dashboard_layout = sa.Column(JSONB, nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
     password_hash: Mapped[Optional[str]] = mapped_column(Text)
     webauthn_credential = sa.Column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -10,6 +10,7 @@ export interface Preferences {
   openai_api_key_set: boolean
   theme: 'light' | 'dark'
   onboarding_complete: boolean
+  currency: string
 }
 
 interface PreferencesStore {
@@ -31,6 +32,7 @@ const DEFAULT_PREFS: Preferences = {
   openai_api_key_set: false,
   theme: 'light',
   onboarding_complete: false,
+  currency: 'USD',
 }
 
 export const usePreferencesStore = create<PreferencesStore>((set, get) => ({

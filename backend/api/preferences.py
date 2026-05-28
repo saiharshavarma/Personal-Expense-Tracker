@@ -26,6 +26,7 @@ class PreferencesUpdate(BaseModel):
     backup_to_icloud: Optional[bool] = None
     dashboard_layout: Optional[dict] = None
     default_budget_rule: Optional[dict] = None
+    currency: Optional[str] = None
 
 
 def _prefs_to_dict(prefs: UserPreferences) -> dict:
@@ -51,6 +52,7 @@ def _prefs_to_dict(prefs: UserPreferences) -> dict:
         "default_budget_rule": prefs.default_budget_rule,
         "onboarding_complete": prefs.onboarding_complete,
         "webauthn_enrolled": prefs.webauthn_credential is not None,
+        "currency": prefs.currency or "USD",
     }
 
 

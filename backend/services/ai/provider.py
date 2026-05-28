@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import List
-from dataclasses import dataclass
+from typing import List, Optional
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -12,6 +12,12 @@ class AICategorizationResult:
     need_want_savings: str
     confidence: float
     flags: List[str]
+    # Extended AI-filled fields
+    fixed_variable: Optional[str] = None          # "fixed" | "variable"
+    personal_work_shared: Optional[str] = None    # "personal" | "work" | "shared"
+    is_reimbursable: bool = False
+    is_recurring: bool = False
+    suggested_tags: List[str] = field(default_factory=list)
 
 
 @dataclass

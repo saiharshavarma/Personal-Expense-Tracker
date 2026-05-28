@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16
-    platform: linux/arm64
+    platform: ${DOCKER_PLATFORM:-}
     container_name: finance-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-financeuser}
@@ -24,7 +24,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    platform: linux/arm64
+    platform: ${DOCKER_PLATFORM:-}
     container_name: finance-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-financeuser}:${POSTGRES_PASSWORD:-financepassword}@postgres:5432/${POSTGRES_DB:-finance_dashboard}
@@ -48,7 +48,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    platform: linux/arm64
+    platform: ${DOCKER_PLATFORM:-}
     container_name: finance-frontend
     environment:
       VITE_API_URL: http://localhost:8000

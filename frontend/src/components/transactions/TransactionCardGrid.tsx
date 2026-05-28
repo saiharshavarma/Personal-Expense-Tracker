@@ -40,14 +40,14 @@ function TransactionCard({
 
   return (
     <Card
-      className={`overflow-hidden cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm group border-l-4 ${
+      className={`overflow-hidden cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm group border-l-4 h-full flex flex-col ${
         needsReview
           ? hasRedReason ? 'border-l-red-400' : 'border-l-amber-400'
           : 'border-l-transparent'
       } ${selected ? 'border-primary bg-primary/5' : ''}`}
       onClick={onEdit}
     >
-      <CardContent className="p-4">
+      <CardContent className="p-4 flex flex-col flex-1 min-h-[160px]">
         {/* Top row: checkbox + category+subcategory + amount */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onSelect() }}>
@@ -92,8 +92,11 @@ function TransactionCard({
           </span>
         ) : null}
 
+        {/* Spacer pushes meta row to bottom */}
+        <div className="flex-1" />
+
         {/* Meta row */}
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
           <span>{formatDate(t.date)}</span>
           <div className="flex items-center gap-1.5">
             {acct && <span className="truncate max-w-[80px]">{acct.name}</span>}
@@ -196,14 +199,14 @@ export function TransactionCardGrid({
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4 items-stretch">
       {transactions.map((t, i) => (
         <motion.div
           key={t.id}
           initial={{ opacity: 0, scale: 0.97 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: i * 0.03 }}
-          className="relative"
+          className="relative h-full"
         >
           <TransactionCard
             t={t}

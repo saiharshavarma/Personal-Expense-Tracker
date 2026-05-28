@@ -165,14 +165,17 @@ CREATE TABLE budgets (
     month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
     year INTEGER NOT NULL,
     category VARCHAR(100) NOT NULL,
+    subcategory VARCHAR(100),
     budget_amount DECIMAL(12,2) NOT NULL,
     needs_pct DECIMAL(5,2),
     wants_pct DECIMAL(5,2),
     savings_pct DECIMAL(5,2),
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE (month, year, category)
+    updated_at TIMESTAMP DEFAULT NOW()
 );
+-- Partial unique indexes: category-level budgets (NULL subcategory) and subcategory-level budgets
+CREATE UNIQUE INDEX uq_budgets_cat_only ON budgets (month, year, category) WHERE subcategory IS NULL;
+CREATE UNIQUE INDEX uq_budgets_cat_sub ON budgets (month, year, category, subcategory) WHERE subcategory IS NOT NULL;
 
 -- ============================================================
 -- income_schedules (references accounts)
@@ -201,9 +204,11 @@ CREATE TABLE merchant_rules (
     category VARCHAR(100),
     subcategory VARCHAR(100),
     need_want_savings VARCHAR(20),
+    fixed_variable VARCHAR(20),
     is_reimbursable BOOLEAN,
     personal_work_shared VARCHAR(20),
     is_recurring BOOLEAN,
+    tags TEXT[],
     confidence DECIMAL(4,3) DEFAULT 1.0,
     times_applied INTEGER DEFAULT 0,
     times_overridden INTEGER DEFAULT 0,

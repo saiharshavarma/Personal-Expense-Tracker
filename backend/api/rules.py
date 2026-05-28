@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, List
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,9 +21,11 @@ class RuleBody(BaseModel):
     category: Optional[str] = None
     subcategory: Optional[str] = None
     need_want_savings: Optional[str] = None
+    fixed_variable: Optional[str] = None
     is_reimbursable: Optional[bool] = None
     personal_work_shared: Optional[str] = None
     is_recurring: Optional[bool] = None
+    tags: Optional[List[str]] = None
 
 
 def _serialize(rule: MerchantRule) -> dict:
@@ -35,9 +37,11 @@ def _serialize(rule: MerchantRule) -> dict:
         "category": rule.category,
         "subcategory": rule.subcategory,
         "need_want_savings": rule.need_want_savings,
+        "fixed_variable": rule.fixed_variable,
         "is_reimbursable": rule.is_reimbursable,
         "personal_work_shared": rule.personal_work_shared,
         "is_recurring": rule.is_recurring,
+        "tags": rule.tags or [],
         "confidence": float(rule.confidence) if rule.confidence is not None else None,
         "times_applied": rule.times_applied,
         "times_overridden": rule.times_overridden,
@@ -70,9 +74,11 @@ async def create_rule(
         category=body.category,
         subcategory=body.subcategory,
         need_want_savings=body.need_want_savings,
+        fixed_variable=body.fixed_variable,
         is_reimbursable=body.is_reimbursable,
         personal_work_shared=body.personal_work_shared,
         is_recurring=body.is_recurring,
+        tags=body.tags or [],
     )
     db.add(rule)
     await db.commit()
@@ -98,9 +104,11 @@ async def update_rule(
     rule.category = body.category
     rule.subcategory = body.subcategory
     rule.need_want_savings = body.need_want_savings
+    rule.fixed_variable = body.fixed_variable
     rule.is_reimbursable = body.is_reimbursable
     rule.personal_work_shared = body.personal_work_shared
     rule.is_recurring = body.is_recurring
+    rule.tags = body.tags or []
 
     await db.commit()
     await db.refresh(rule)

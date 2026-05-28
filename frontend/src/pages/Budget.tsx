@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { monthName, getCurrentMonthYear, formatCurrency } from '@/lib/utils'
-import { ALL_CATEGORIES, getCategoryColor } from '@/lib/categories'
+import { ALL_CATEGORIES, getCategoryColor, getSubcategories } from '@/lib/categories'
 import { api } from '@/utils/apiClient'
 
 const { month: currentMonth, year: currentYear } = getCurrentMonthYear()
@@ -38,6 +38,7 @@ const { month: currentMonth, year: currentYear } = getCurrentMonthYear()
 interface BudgetRow {
   id: string | null
   category: string
+  subcategory?: string | null
   budget_amount: number
   gross_spend: number
   reimbursed: number
@@ -50,6 +51,7 @@ interface BudgetRow {
 interface NWSBucket {
   spent: number
   target_pct: number
+  target_amount: number
 }
 
 interface ActualsResponse {
@@ -64,6 +66,8 @@ interface ActualsResponse {
     remaining: number
   }
   nws_summary: {
+    income: number
+    income_source: 'income_category' | 'all_credits' | 'none'
     needs: NWSBucket
     wants: NWSBucket
     savings: NWSBucket
@@ -99,18 +103,22 @@ interface BudgetDialogProps {
   onSaved: () => void
   month: number
   year: number
-  editing?: { id: string; category: string; budget_amount: number } | null
+  editing?: { id: string; category: string; subcategory?: string; budget_amount: number } | null
 }
 
 function BudgetDialog({ open, onClose, onSaved, month, year, editing }: BudgetDialogProps) {
   const [category, setCategory] = useState(editing?.category ?? '')
+  const [subcategory, setSubcategory] = useState(editing?.subcategory ?? '')
   const [amount, setAmount] = useState(editing ? String(editing.budget_amount) : '')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
 
+  const subcats = getSubcategories(category)
+
   useEffect(() => {
     if (open) {
       setCategory(editing?.category ?? '')
+      setSubcategory(editing?.subcategory ?? '')
       setAmount(editing ? String(editing.budget_amount) : '')
       setErr('')
     }
@@ -126,7 +134,7 @@ function BudgetDialog({ open, onClose, onSaved, month, year, editing }: BudgetDi
       if (editing?.id) {
         await api.put(`/budgets/${editing.id}`, { budget_amount: n })
       } else {
-        await api.post('/budgets', { month, year, category, budget_amount: n })
+        await api.post('/budgets', { month, year, category, subcategory: subcategory || undefined, budget_amount: n })
       }
       onSaved()
       onClose()
@@ -142,15 +150,15 @@ function BudgetDialog({ open, onClose, onSaved, month, year, editing }: BudgetDi
     <Dialog open={open} onOpenChange={v => !v && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Budget' : 'Add Category Budget'}</DialogTitle>
+          <DialogTitle>{editing ? 'Edit Budget' : 'Add Budget'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Category</Label>
             {editing ? (
-              <Input value={category} disabled className="bg-muted" />
+              <Input value={editing.subcategory ? `${category} › ${editing.subcategory}` : category} disabled className="bg-muted" />
             ) : (
-              <Select value={category} onValueChange={setCategory}>
+              <Select value={category} onValueChange={v => { setCategory(v); setSubcategory('') }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select category…" />
                 </SelectTrigger>
@@ -162,8 +170,26 @@ function BudgetDialog({ open, onClose, onSaved, month, year, editing }: BudgetDi
               </Select>
             )}
           </div>
+          {/* Subcategory — optional, only shown when category is selected */}
+          {(category && subcats.length > 0 && !editing) && (
+            <div className="space-y-1.5">
+              <Label>Subcategory <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Select value={subcategory || '__all'} onValueChange={v => setSubcategory(v === '__all' ? '' : v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All subcategories" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all">All subcategories</SelectItem>
+                  {subcats.map(s => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Leave blank to budget for the entire category</p>
+            </div>
+          )}
           <div className="space-y-1.5">
-            <Label>Monthly Budget ($)</Label>
+            <Label>Monthly Budget</Label>
             <Input
               type="number"
               min="0"
@@ -237,7 +263,10 @@ function NWSEditor({ open, onClose, onSaved, current }: NWSEditorProps) {
           <DialogTitle>Customize Budget Rule</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          <p className="text-sm text-muted-foreground">Set your target percentages for Needs, Wants, and Savings. They must add up to 100%.</p>
+          <p className="text-sm text-muted-foreground">
+          Set what % of your monthly <strong>income</strong> should go to each bucket.
+          They must add up to 100%. Classic rule: 50% Needs, 30% Wants, 20% Savings.
+        </p>
           {[
             { label: 'Needs (%)' , val: needs, set: setNeeds },
             { label: 'Wants (%)' , val: wants, set: setWants },
@@ -272,7 +301,7 @@ export function Budget() {
   const [data, setData] = useState<ActualsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<{ id: string; category: string; budget_amount: number } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; category: string; subcategory?: string; budget_amount: number } | null>(null)
   const [nwsOpen, setNwsOpen] = useState(false)
   const [copying, setCopying] = useState(false)
   const [copyMsg, setCopyMsg] = useState('')
@@ -329,16 +358,18 @@ export function Budget() {
   const rows = data?.rows ?? []
   const totals = data?.totals ?? { budget: 0, gross_spend: 0, reimbursed: 0, net_personal: 0, remaining: 0 }
   const nws = data?.nws_summary ?? {
-    needs: { spent: 0, target_pct: 50 },
-    wants: { spent: 0, target_pct: 30 },
-    savings: { spent: 0, target_pct: 20 },
+    income: 0,
+    income_source: 'none' as const,
+    needs:   { spent: 0, target_pct: 50, target_amount: 0 },
+    wants:   { spent: 0, target_pct: 30, target_amount: 0 },
+    savings: { spent: 0, target_pct: 20, target_amount: 0 },
   }
-  const totalSpend = totals.net_personal || 1
+  const income = nws.income
 
   const nwsConfig = [
-    { key: 'needs', label: 'Needs', color: 'bg-blue-500', ...nws.needs },
-    { key: 'wants', label: 'Wants', color: 'bg-purple-500', ...nws.wants },
-    { key: 'savings', label: 'Savings', color: 'bg-green-500', ...nws.savings },
+    { key: 'needs',   label: 'Needs',   color: 'bg-blue-500',   colorOver: 'bg-red-500',   ...nws.needs   },
+    { key: 'wants',   label: 'Wants',   color: 'bg-purple-500', colorOver: 'bg-red-500',   ...nws.wants   },
+    { key: 'savings', label: 'Savings', color: 'bg-green-500',  colorOver: 'bg-amber-500', ...nws.savings },
   ]
 
   return (
@@ -387,54 +418,105 @@ export function Budget() {
         </Button>
       </div>
 
+      {/* Income banner */}
+      {income > 0 ? (
+        <div className="flex items-center justify-between rounded-lg bg-muted/60 border px-4 py-2.5 mb-4 text-sm">
+          <span className="text-muted-foreground">
+            {nws.income_source === 'income_category'
+              ? 'Income this month (from Income-tagged transactions)'
+              : 'Income this month (all non-transfer credits — tag transactions as "Income" for precision)'}
+          </span>
+          <span className="font-semibold tabular-nums">{fmt(income)}</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-4 py-2.5 mb-4 text-sm">
+          <Minus className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800 dark:text-amber-300">
+            No income recorded this month — import payslip/salary transactions or tag income transactions with the <strong>Income</strong> category to see dollar targets below.
+          </span>
+        </div>
+      )}
+
       {/* 50/30/20 summary cards */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        {nwsConfig.map(({ key, label, color, spent, target_pct }) => {
-          const pct = totalSpend > 0 ? (spent / totalSpend) * 100 : 0
-          const delta = pct - target_pct
-          const isSavings = key === 'savings'
+      <div className="grid grid-cols-3 gap-4 mb-2">
+        {nwsConfig.map(({ key, label, color, colorOver, spent, target_pct, target_amount }) => {
+          // Bar fills as % of the income-based target.
+          // If no income, fall back to % of total spending (less meaningful but better than nothing).
+          const barPct = income > 0
+            ? target_amount > 0 ? Math.min((spent / target_amount) * 100, 120) : 0
+            : totals.net_personal > 0 ? (spent / totals.net_personal) * 100 : 0
+          const isOver = income > 0 ? spent > target_amount && target_amount > 0 : false
+          const overUnder = income > 0 && target_amount > 0 ? spent - target_amount : null
           return (
             <Card key={key}>
               <CardContent className="pt-4 pb-4">
-                <div className="flex justify-between items-center mb-2">
+                {/* Header */}
+                <div className="flex justify-between items-center mb-1">
                   <span className="text-sm font-medium">{label}</span>
-                  <span className="text-xs text-muted-foreground">Target {target_pct}%</span>
-                </div>
-                <div className="relative h-2 rounded-full bg-secondary overflow-hidden mb-2">
-                  <div
-                    className={`absolute left-0 top-0 h-full rounded-full transition-all ${color}`}
-                    style={{ width: `${Math.min(pct, 100)}%` }}
-                  />
-                  {/* Target marker */}
-                  <div
-                    className="absolute top-0 w-0.5 h-full bg-foreground/30"
-                    style={{ left: `${target_pct}%` }}
-                  />
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-muted-foreground">{fmt(spent)}</span>
-                  <span className={
-                    Math.abs(delta) < 5 ? 'text-muted-foreground' :
-                    delta > 0 ? 'text-destructive font-medium' : 'text-green-600 dark:text-green-400 font-medium'
-                  }>
-                    {pct.toFixed(1)}%
-                    {Math.abs(delta) >= 5 && (
-                      delta > 0
-                        ? <TrendingUp className="inline w-3 h-3 ml-0.5" />
-                        : <TrendingDown className="inline w-3 h-3 ml-0.5" />
-                    )}
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {target_pct}% of income
                   </span>
                 </div>
-                {isSavings && spent === 0 && (
-                  <p className="text-[10px] text-muted-foreground/70 mt-1.5 leading-snug">
-                    Counts transactions tagged as "Savings" type (e.g. transfers to savings account).
-                  </p>
-                )}
+
+                {/* Target dollar amount */}
+                <div className="flex justify-between items-baseline mb-2">
+                  <span className="text-lg font-bold tabular-nums">{fmt(spent)}</span>
+                  {income > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      of {fmt(target_amount)} target
+                    </span>
+                  )}
+                </div>
+
+                {/* Progress bar: (spent / target) */}
+                <div className="relative h-2 rounded-full bg-secondary overflow-hidden mb-2">
+                  <div
+                    className={`absolute left-0 top-0 h-full rounded-full transition-all ${isOver ? colorOver : color}`}
+                    style={{ width: `${Math.min(barPct, 100)}%` }}
+                  />
+                </div>
+
+                {/* Footer */}
+                <div className="flex justify-between items-center text-xs">
+                  {income > 0 ? (
+                    <>
+                      <span className="text-muted-foreground">
+                        {barPct.toFixed(0)}% of target used
+                      </span>
+                      {overUnder !== null && (
+                        <span className={overUnder > 0
+                          ? 'text-destructive font-medium'
+                          : 'text-green-600 dark:text-green-400 font-medium'
+                        }>
+                          {overUnder > 0
+                            ? <><TrendingUp className="inline w-3 h-3 mr-0.5" />{fmt(overUnder)} over</>
+                            : <><TrendingDown className="inline w-3 h-3 mr-0.5" />{fmt(Math.abs(overUnder))} under</>
+                          }
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {totals.net_personal > 0
+                        ? `${((spent / totals.net_personal) * 100).toFixed(1)}% of total spend`
+                        : '—'}
+                    </span>
+                  )}
+                </div>
               </CardContent>
             </Card>
           )
         })}
       </div>
+
+      {/* Explanation */}
+      <p className="text-xs text-muted-foreground mb-6 px-1">
+        <span className="font-medium">How this works:</span>{' '}
+        The 50/30/20 rule targets <span className="font-medium">% of your monthly income</span> — not your spending.
+        Each bar shows how much you spent on Needs / Wants / Savings versus the income-based dollar target.
+        Transactions are tagged by the AI on import, or edit the <span className="font-medium">Need / Want / Savings</span> field manually.
+        Adjust your split in <span className="font-medium">Settings → Categories → Budget Rule</span>.
+      </p>
 
       {/* Totals summary */}
       {!loading && rows.length > 0 && (
@@ -506,28 +588,43 @@ export function Budget() {
             <AnimatePresence initial={false}>
               {rows.map(row => {
                 const barColor = STATUS_CONFIG[row.status].bar
+                const rowKey = `${row.category}|${row.subcategory ?? ''}`
                 return (
                   <motion.div
-                    key={row.category}
+                    key={rowKey}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="group"
+                    className={`group ${row.subcategory ? 'bg-muted/20' : ''}`}
                   >
                     <div
                       className="grid gap-4 px-4 py-3 items-center border-b last:border-0 hover:bg-accent/50 transition-colors"
                       style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 80px 64px' }}
                     >
-                      {/* Category name + progress bar */}
+                      {/* Category / subcategory name + progress bar */}
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span
-                            className="w-2 h-2 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: getCategoryColor(row.category) }}
-                          />
-                          <span className="text-sm font-medium truncate">{row.category}</span>
+                          {row.subcategory ? (
+                            /* Subcategory row: indented with connector */
+                            <span className="ml-4 w-2 h-2 rounded-full flex-shrink-0 border-2 border-current opacity-50" />
+                          ) : (
+                            <span
+                              className="w-2 h-2 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: getCategoryColor(row.category) }}
+                            />
+                          )}
+                          <div className="min-w-0">
+                            {row.subcategory ? (
+                              <div>
+                                <span className="text-xs text-muted-foreground">{row.category} › </span>
+                                <span className="text-sm font-medium truncate">{row.subcategory}</span>
+                              </div>
+                            ) : (
+                              <span className="text-sm font-medium truncate">{row.category}</span>
+                            )}
+                          </div>
                         </div>
                         {row.budget_amount > 0 && (
-                          <div className="relative h-1.5 rounded-full bg-secondary overflow-hidden">
+                          <div className={`relative h-1.5 rounded-full bg-secondary overflow-hidden ${row.subcategory ? 'ml-6' : ''}`}>
                             <div
                               className={`absolute left-0 top-0 h-full rounded-full transition-all ${barColor}`}
                               style={{ width: `${Math.min(row.pct_used, 100)}%` }}
@@ -564,10 +661,9 @@ export function Budget() {
                         <button
                           onClick={() => {
                             if (row.id) {
-                              setEditing({ id: row.id, category: row.category, budget_amount: row.budget_amount })
+                              setEditing({ id: row.id, category: row.category, subcategory: row.subcategory ?? undefined, budget_amount: row.budget_amount })
                             } else {
                               setEditing(null)
-                              setDialogOpen(true)
                             }
                             setDialogOpen(true)
                           }}

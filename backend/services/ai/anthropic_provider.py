@@ -43,6 +43,11 @@ For each transaction, return a JSON array with the same number of elements in th
 - "subcategory": exactly one of the valid subcategories for that category (see taxonomy — NEVER use a value not listed)
 - "merchant_clean": a clean, normalized merchant name (e.g. "Netflix" not "NETFLIX.COM")
 - "need_want_savings": "need", "want", or "savings"
+- "fixed_variable": "fixed" if the amount is the same every period (rent, subscriptions, loan payments), "variable" otherwise
+- "personal_work_shared": "work" if clearly a business expense, "personal" for personal spending, "shared" if it could be either
+- "is_reimbursable": true if this looks like a work/business expense that should be reimbursed, false otherwise
+- "is_recurring": true if this is a known recurring charge (subscriptions, utilities, rent, loan payments), false otherwise
+- "tags": array of 0-3 short descriptive tags, e.g. ["subscription", "software"], ["travel", "work"], [] for none
 - "confidence": float 0.0-1.0 (your confidence in this categorization)
 - "flags": array of zero or more strings from: ["recurring", "reimbursable", "work_expense", "large_amount", "unusual"]
 
@@ -53,10 +58,13 @@ Classification rules:
 - need = rent, groceries, utilities, health, insurance, commuting
 - want = dining out, entertainment, shopping, subscriptions, travel, personal care
 - savings = investments, savings transfers, retirement
+- fixed = same amount each period: rent, mortgage, loan payments, most subscriptions, insurance
+- variable = amount changes: groceries, dining, gas, shopping, entertainment
 - Be conservative with confidence — use <0.75 if the description is ambiguous.
-- Netflix/Spotify/Hulu → Subscriptions / Streaming Video
+- Netflix/Spotify/Hulu → Subscriptions / Streaming Video, fixed, recurring=true
 - Amazon/eBay/Walmart → Shopping / Online Shopping (unless clearly food/pharmacy)
 - Uber/Lyft → Transportation / Rideshare / Taxi
+- Airline/hotel/conference fees → personal_work_shared="work", is_reimbursable=true if description suggests business travel
 
 Respond with ONLY a valid JSON array, no markdown, no explanation."""
 
@@ -106,6 +114,11 @@ class AnthropicProvider(AIProvider):
                 subcategory=item.get("subcategory", ""),
                 merchant_clean=item.get("merchant_clean", ""),
                 need_want_savings=item.get("need_want_savings", "want"),
+                fixed_variable=item.get("fixed_variable") or None,
+                personal_work_shared=item.get("personal_work_shared") or None,
+                is_reimbursable=bool(item.get("is_reimbursable", False)),
+                is_recurring=bool(item.get("is_recurring", False)),
+                suggested_tags=item.get("tags") or [],
                 confidence=float(item.get("confidence", 0.5)),
                 flags=item.get("flags", []),
             ))

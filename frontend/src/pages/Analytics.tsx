@@ -154,8 +154,8 @@ function IncomeExpensesChart({ months }: { months: number }) {
         <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
         <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
-        <Tooltip content={<CurrencyTooltip />} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'transparent' }} />
         <Bar dataKey="income" name="Income" fill="#22c55e" radius={[3, 3, 0, 0]} maxBarSize={28} />
         <Bar dataKey="expenses" name="Expenses" fill="#ef4444" radius={[3, 3, 0, 0]} maxBarSize={28} />
       </BarChart>
@@ -185,7 +185,7 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
         <XAxis type="number" tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
         <YAxis dataKey="category" type="category" tick={TICK_STYLE} tickLine={false} axisLine={false} width={105} />
-        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(100,100,100,0.07)' }} />
+        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'transparent' }} />
         <Bar dataKey="total" name="Amount" radius={[0, 4, 4, 0]} maxBarSize={20}>
           {data.map((_: any, i: number) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
         </Bar>
@@ -366,7 +366,7 @@ function TopMerchantsChart({ month, year }: { month: number; year: number }) {
         <XAxis type="number" tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
         <YAxis dataKey="merchant" type="category" tick={TICK_STYLE} tickLine={false} axisLine={false} width={110} />
-        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(100,100,100,0.07)' }} />
+        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'transparent' }} />
         <Bar dataKey="total" name="Amount" fill="#3b82f6" radius={[0, 4, 4, 0]} maxBarSize={20} />
       </BarChart>
     </ResponsiveContainer>
@@ -398,6 +398,7 @@ function DayOfWeekChart({ months }: { months: number }) {
         <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
         <Tooltip
+          cursor={{ fill: 'transparent' }}
           content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null
             const d = payload[0].payload
@@ -461,7 +462,7 @@ function BudgetTrendChart({ months }: { months: number }) {
         <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
         <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
-        <Tooltip content={<CurrencyTooltip />} />
+        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'transparent' }} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
         <Bar dataKey="budgeted" name="Budgeted" fill="#94a3b8" radius={[3, 3, 0, 0]} maxBarSize={24} />
         <Bar dataKey="actual" name="Actual" fill="#3b82f6" radius={[3, 3, 0, 0]} maxBarSize={24} />
@@ -496,7 +497,7 @@ function ReimbursementChart() {
         <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
         <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
-        <Tooltip content={<CurrencyTooltip />} />
+        <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'transparent' }} />
         <Bar dataKey="total" name="Amount" radius={[3, 3, 0, 0]} maxBarSize={48}>
           {data.map((d: any, i: number) => <Cell key={i} fill={d.fill} />)}
         </Bar>

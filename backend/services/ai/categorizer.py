@@ -78,6 +78,11 @@ async def categorize_transactions(
                 subcategory=r.get("subcategory", ""),
                 merchant_clean=r.get("merchant_clean", ""),
                 need_want_savings=r.get("need_want_savings", "want"),
+                fixed_variable=r.get("fixed_variable"),
+                personal_work_shared=r.get("personal_work_shared"),
+                is_reimbursable=bool(r.get("is_reimbursable", False)),
+                is_recurring=bool(r.get("is_recurring", False)),
+                suggested_tags=r.get("tags") or [],
                 confidence=r.get("confidence", 1.0),
                 flags=[],
             ))

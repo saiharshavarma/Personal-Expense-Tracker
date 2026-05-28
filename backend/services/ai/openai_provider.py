@@ -53,6 +53,11 @@ class OpenAIProvider(AIProvider):
                 subcategory=item.get("subcategory", ""),
                 merchant_clean=item.get("merchant_clean", ""),
                 need_want_savings=item.get("need_want_savings", "want"),
+                fixed_variable=item.get("fixed_variable") or None,
+                personal_work_shared=item.get("personal_work_shared") or None,
+                is_reimbursable=bool(item.get("is_reimbursable", False)),
+                is_recurring=bool(item.get("is_recurring", False)),
+                suggested_tags=item.get("tags") or [],
                 confidence=float(item.get("confidence", 0.5)),
                 flags=item.get("flags", []),
             ))
