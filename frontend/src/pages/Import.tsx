@@ -290,34 +290,48 @@ function UploadTab() {
                     {/* Preview table */}
                     {entry.status === 'preview' && entry.uploadResult && (
                       <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Preview — {entry.uploadResult.total} transactions found
-                          {entry.uploadResult.institution && ` · ${entry.uploadResult.institution}`}
-                        </p>
-                        <div className="overflow-x-auto rounded-md border">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="border-b bg-muted/50">
-                                <th className="text-left px-3 py-2 font-medium">Date</th>
-                                <th className="text-left px-3 py-2 font-medium">Description</th>
-                                <th className="text-right px-3 py-2 font-medium">Amount</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {entry.uploadResult.preview.slice(0, 10).map((tx, i) => (
-                                <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
-                                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{tx.date}</td>
-                                  <td className="px-3 py-2 max-w-[200px] truncate">{tx.description}</td>
-                                  <td className={`px-3 py-2 text-right tabular-nums font-medium ${tx.direction === 'credit' ? 'text-green-500' : ''}`}>
-                                    {tx.direction === 'credit' ? '+' : '-'}${Math.abs(tx.amount).toFixed(2)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                            Preview — {entry.uploadResult.total} transactions
+                            {entry.uploadResult.institution && ` · ${entry.uploadResult.institution}`}
+                          </p>
+                          {entry.uploadResult.preview.length < entry.uploadResult.total && (
+                            <p className="text-xs text-muted-foreground">
+                              Showing {entry.uploadResult.preview.length} of {entry.uploadResult.total}
+                            </p>
+                          )}
+                        </div>
+                        <div className="rounded-md border overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <div className="max-h-56 overflow-y-auto">
+                              <table className="w-full text-xs">
+                                <thead className="sticky top-0 bg-muted/90 backdrop-blur-sm">
+                                  <tr className="border-b">
+                                    <th className="text-left px-3 py-2 font-medium">#</th>
+                                    <th className="text-left px-3 py-2 font-medium">Date</th>
+                                    <th className="text-left px-3 py-2 font-medium">Description</th>
+                                    <th className="text-right px-3 py-2 font-medium">Amount</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {entry.uploadResult.preview.map((tx, i) => (
+                                    <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                                      <td className="px-3 py-1.5 text-muted-foreground/50">{i + 1}</td>
+                                      <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{tx.date}</td>
+                                      <td className="px-3 py-1.5 max-w-[220px] truncate" title={tx.description}>{tx.description}</td>
+                                      <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${tx.direction === 'credit' ? 'text-green-500' : ''}`}>
+                                        {tx.direction === 'credit' ? '+' : '−'}${Math.abs(tx.amount).toFixed(2)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
                         </div>
                         <Button size="sm" onClick={() => handleConfirm(entry)} className="w-full">
-                          Confirm Import ({entry.uploadResult.total} transactions)
+                          <CheckCircle2 className="w-4 h-4" />
+                          Import {entry.uploadResult.total} transaction{entry.uploadResult.total !== 1 ? 's' : ''}
                         </Button>
                       </div>
                     )}

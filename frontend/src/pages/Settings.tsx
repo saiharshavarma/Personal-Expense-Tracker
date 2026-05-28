@@ -4,7 +4,7 @@ import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
   Database, Download, Shield, ChevronRight, Sun, Moon, Check,
   Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save,
-  Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw,
+  Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw, Trash2, Plus,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -72,21 +72,240 @@ function AccountsTab() {
   )
 }
 
+interface MerchantRule {
+  id: string
+  pattern: string
+  match_type: string | null
+  merchant_clean: string | null
+  category: string | null
+  subcategory: string | null
+  need_want_savings: string | null
+  is_reimbursable: boolean | null
+  is_recurring: boolean | null
+  personal_work_shared: string | null
+  confidence: number | null
+  times_applied: number
+  times_overridden: number
+  created_at: string | null
+}
+
+const ALL_CATEGORIES_SETTINGS = [
+  'Food & Dining', 'Groceries', 'Transportation', 'Shopping', 'Entertainment',
+  'Health & Medical', 'Travel', 'Utilities', 'Housing', 'Education',
+  'Personal Care', 'Business', 'Investments', 'Income', 'Transfers', 'Other',
+]
+
 function CategoriesTab() {
+  const [rules, setRules] = useState<MerchantRule[]>([])
+  const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ pattern: '', match_type: 'contains', category: '', subcategory: '' })
+  const [addMsg, setAddMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [listMsg, setListMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await api.get('/rules')
+      setRules(res.data)
+    } catch { /* ignore */ } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleDelete = async (id: string) => {
+    setDeleting(id)
+    setDeleteError(null)
+    try {
+      await api.delete(`/rules/${id}`)
+      setRules(r => r.filter(x => x.id !== id))
+    } catch {
+      setDeleteError('Failed to delete rule. Please try again.')
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const handleAdd = async () => {
+    if (!form.pattern.trim()) {
+      setAddMsg({ type: 'error', text: 'Pattern is required.' })
+      return
+    }
+    setSaving(true)
+    setAddMsg(null)
+    try {
+      const res = await api.post('/rules', {
+        pattern: form.pattern.trim(),
+        match_type: form.match_type || 'contains',
+        category: form.category || null,
+        subcategory: form.subcategory || null,
+      })
+      setRules(r => [res.data, ...r])
+      setForm({ pattern: '', match_type: 'contains', category: '', subcategory: '' })
+      setAddMsg(null)
+      setShowAdd(false)
+      // Show confirmation outside the form (which we just hid)
+      setListMsg({ type: 'success', text: `Rule "${res.data.pattern}" added.` })
+      setTimeout(() => setListMsg(null), 4000)
+    } catch {
+      setAddMsg({ type: 'error', text: 'Failed to add rule.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Merchant Rules</CardTitle>
-          <CardDescription>Auto-categorization rules based on merchant name matching</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base">Merchant Rules</CardTitle>
+              <CardDescription>Auto-categorization rules based on merchant name matching</CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
+              <Button size="sm" onClick={() => { setShowAdd(v => !v); setAddMsg(null) }}>
+                <Plus className="w-3.5 h-3.5" /> Add Rule
+              </Button>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="py-8 text-center">
-          <Tag className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-          <p className="font-medium">No merchant rules yet</p>
-          <p className="text-sm text-muted-foreground mt-1">Rules are created automatically as you correct AI categorizations</p>
-          <Button size="sm" variant="outline" className="mt-4">Add Rule</Button>
+        <CardContent className="space-y-3">
+          {/* Add rule form */}
+          {showAdd && (
+            <div className="rounded-lg border p-3 space-y-3 bg-muted/30">
+              <p className="text-xs font-semibold">New rule</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">Pattern *</Label>
+                  <Input
+                    placeholder="e.g. starbucks"
+                    value={form.pattern}
+                    onChange={e => setForm(f => ({ ...f, pattern: e.target.value }))}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Match type</Label>
+                  <select
+                    value={form.match_type}
+                    onChange={e => setForm(f => ({ ...f, match_type: e.target.value }))}
+                    className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="contains">contains</option>
+                    <option value="exact">exact</option>
+                    <option value="starts_with">starts with</option>
+                    <option value="regex">regex</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Category</Label>
+                  <select
+                    value={form.category}
+                    onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                    className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="">— none —</option>
+                    {ALL_CATEGORIES_SETTINGS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Subcategory</Label>
+                  <Input
+                    placeholder="optional"
+                    value={form.subcategory}
+                    onChange={e => setForm(f => ({ ...f, subcategory: e.target.value }))}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+              {addMsg && (
+                <p className={`text-xs flex items-center gap-1 ${addMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+                  {addMsg.type === 'success' ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                  {addMsg.text}
+                </p>
+              )}
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleAdd} disabled={saving}>
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  Save Rule
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setShowAdd(false); setAddMsg(null) }}>Cancel</Button>
+              </div>
+            </div>
+          )}
+
+          {/* List-level feedback messages */}
+          {listMsg && (
+            <p className={`text-xs flex items-center gap-1 ${listMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+              {listMsg.type === 'success' ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+              {listMsg.text}
+            </p>
+          )}
+          {deleteError && (
+            <p className="text-xs flex items-center gap-1 text-destructive">
+              <AlertCircle className="w-3 h-3" /> {deleteError}
+            </p>
+          )}
+
+          {/* Rules list */}
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : rules.length === 0 ? (
+            <div className="py-8 text-center">
+              <Tag className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+              <p className="font-medium text-sm">No merchant rules yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Rules are created automatically as you correct AI categorizations, or add them manually above</p>
+            </div>
+          ) : (
+            <div className="divide-y text-xs">
+              {/* Header */}
+              <div className="grid grid-cols-[1fr_auto_1fr_60px_80px] gap-3 py-1.5 font-medium text-muted-foreground uppercase tracking-wide">
+                <span>Pattern</span>
+                <span>Match</span>
+                <span>Category</span>
+                <span className="text-center">Applied</span>
+                <span />
+              </div>
+              {rules.map(rule => (
+                <div key={rule.id} className="grid grid-cols-[1fr_auto_1fr_60px_80px] gap-3 py-2 items-center">
+                  <span className="font-mono text-foreground truncate" title={rule.pattern}>{rule.pattern}</span>
+                  <span className="text-muted-foreground">{rule.match_type ?? 'contains'}</span>
+                  <span className={rule.category ? 'text-foreground' : 'text-muted-foreground/50'}>
+                    {rule.category ?? '—'}
+                    {rule.subcategory && <span className="text-muted-foreground"> · {rule.subcategory}</span>}
+                  </span>
+                  <span className="text-center text-muted-foreground">{rule.times_applied}</span>
+                  <div className="flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleDelete(rule.id)}
+                      disabled={deleting === rule.id}
+                    >
+                      {deleting === rule.id
+                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                        : <Trash2 className="w-3 h-3" />}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Budget Categories</CardTitle>

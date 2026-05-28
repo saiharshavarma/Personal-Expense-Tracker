@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -14,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from db.database import get_db
 from db.models import UserPreferences
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -112,8 +115,8 @@ async def setup(body: SetupRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Already set up. Use /login to authenticate.")
     if body.password != body.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
 
     prefs.password_hash = _hash_password(body.password)
     prefs.onboarding_complete = True
@@ -255,11 +258,12 @@ async def webauthn_register_finish(
             credential=reg_credential,
             expected_challenge=challenge_bytes,
             expected_rp_id="localhost",
-            expected_origin="http://localhost:3000",
+            expected_origin=settings.webauthn_origin,
             require_user_verification=True,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"WebAuthn verification failed: {e}")
+        logger.warning("WebAuthn registration failed: %s", e)
+        raise HTTPException(status_code=400, detail="WebAuthn registration failed")
 
     cred_data["credential_id"] = base64.urlsafe_b64encode(verification.credential_id).rstrip(b"=").decode()
     cred_data["public_key"] = base64.urlsafe_b64encode(verification.credential_public_key).rstrip(b"=").decode()
@@ -356,13 +360,14 @@ async def webauthn_authenticate_finish(
             credential=auth_credential,
             expected_challenge=challenge_bytes,
             expected_rp_id="localhost",
-            expected_origin="http://localhost:3000",
+            expected_origin=settings.webauthn_origin,
             credential_public_key=pub_key_bytes,
             credential_current_sign_count=sign_count,
             require_user_verification=True,
         )
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Touch ID verification failed: {e}")
+        logger.warning("WebAuthn authentication failed: %s", e)
+        raise HTTPException(status_code=401, detail="Touch ID verification failed")
 
     cred_data["sign_count"] = verification.new_sign_count
     cred_data.pop("pending_auth_challenge", None)

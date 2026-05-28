@@ -1,9 +1,9 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   ArrowUpDown, ArrowUp, ArrowDown,
   Pencil, Trash2, MoreHorizontal,
-  AlertCircle, Columns3,
+  AlertCircle, Columns3, Check, X,
   ArrowDownLeft, ArrowUpRight, Plane,
 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -166,6 +166,82 @@ function InlineSubcategoryEditor({
   )
 }
 
+// ── Inline note editor ─────────────────────────────────────────────────────────
+
+function InlineNoteEditor({
+  value, transactionId, onSave, placeholder,
+}: { value: string | null; transactionId: string; onSave: (id: string, note: string) => Promise<void>; placeholder?: React.ReactNode }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value ?? '')
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing) {
+      setDraft(value ?? '')
+      setTimeout(() => inputRef.current?.focus(), 0)
+    }
+  }, [editing, value])
+
+  const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await onSave(transactionId, draft.trim())
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleSave() }
+    if (e.key === 'Escape') { setEditing(false) }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Add a note…"
+          className="flex-1 min-w-0 text-sm bg-background border border-input rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-ring"
+        />
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex-shrink-0 p-0.5 rounded hover:bg-green-100 dark:hover:bg-green-900/40 text-green-600 transition-colors"
+        >
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="flex-shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground transition-colors"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); setEditing(true) }}
+      title="Click to edit note"
+      className="cursor-text group/note flex items-center gap-1 min-w-0"
+    >
+      {value?.trim()
+        ? <p className="text-sm text-muted-foreground truncate group-hover/note:text-foreground transition-colors">{value}</p>
+        : placeholder ?? <span className="text-xs text-muted-foreground/30">—</span>
+      }
+      <Pencil className="w-2.5 h-2.5 text-muted-foreground/40 opacity-0 group-hover/note:opacity-100 flex-shrink-0 transition-opacity" />
+    </div>
+  )
+}
+
 // ── Sort header ────────────────────────────────────────────────────────────────
 
 function SortHeader({
@@ -246,6 +322,7 @@ interface TransactionTableProps {
   onDelete: (id: string) => void
   onCategoryUpdate: (id: string, category: string) => Promise<void>
   onSubcategoryUpdate: (id: string, subcategory: string) => Promise<void>
+  onNoteUpdate: (id: string, note: string) => Promise<void>
   cols: Record<ColKey, boolean>
   onColsChange: (cols: Record<ColKey, boolean>) => void
   // Resizable / reorderable columns — owned by the parent so ColumnPicker reset works
@@ -259,7 +336,7 @@ interface TransactionTableProps {
 export function TransactionTable({
   transactions, isLoading, filters, onSortChange,
   selectedIds, onSelectChange, onEdit, onDelete,
-  onCategoryUpdate, onSubcategoryUpdate,
+  onCategoryUpdate, onSubcategoryUpdate, onNoteUpdate,
   cols, colOrder, colWidths,
   onColOrderChange, onColWidthsChange,
   trips = [],
@@ -524,7 +601,7 @@ export function TransactionTable({
             {/* Data cells — rendered in colOrder order by iterating visibleDefs */}
             {visibleDefs.map((def) => {
               const k = def.key
-              const stopProp = k === 'category' || k === 'subcategory'
+              const stopProp = k === 'category' || k === 'subcategory' || k === 'what_for'
               return (
                 <div
                   key={k}
@@ -545,22 +622,21 @@ export function TransactionTable({
                     </>
                   )}
                   {k === 'what_for' && (
-                    // Single-line: note text → top review badge → dash.
-                    // No stacking so every row stays the same height.
-                    t.notes?.trim() ? (
-                      <p className="text-sm text-muted-foreground truncate">{t.notes}</p>
-                    ) : whatForReasons[0] ? (
-                      <Pill color={
-                        whatForReasons[0].color === 'red'  ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
-                        whatForReasons[0].color === 'blue' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' :
-                                                             'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
-                      }>
-                        <AlertCircle className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{whatForReasons[0].label}</span>
-                      </Pill>
-                    ) : (
-                      <span className="text-xs text-muted-foreground/30">—</span>
-                    )
+                    <InlineNoteEditor
+                      value={t.notes ?? null}
+                      transactionId={t.id}
+                      onSave={onNoteUpdate}
+                      placeholder={whatForReasons[0] ? (
+                        <Pill color={
+                          whatForReasons[0].color === 'red'  ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' :
+                          whatForReasons[0].color === 'blue' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' :
+                                                               'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300'
+                        }>
+                          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{whatForReasons[0].label}</span>
+                        </Pill>
+                      ) : undefined}
+                    />
                   )}
                   {k === 'category' && (
                     <InlineCategoryEditor value={t.category} transactionId={t.id} onSave={onCategoryUpdate} />

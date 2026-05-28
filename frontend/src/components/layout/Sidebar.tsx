@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, ArrowLeftRight, Upload, BarChart3, Target,
-  Receipt, RefreshCw, Plane, MessageSquare, Settings,
+  Receipt, RefreshCw, Plane, MessageSquare, BrainCircuit, Settings,
   ChevronsLeft, ChevronsRight, Moon, Sun, LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -73,6 +73,7 @@ export function Sidebar() {
     { icon: RefreshCw,       label: 'Subscriptions',  to: '/subscriptions' },
     { icon: Plane,           label: 'Trips',          to: '/trips' },
     { icon: MessageSquare,   label: 'Ask AI',         to: '/ask-ai' },
+    { icon: BrainCircuit,    label: 'Finance Advisor', to: '/advisor' },
     { icon: Settings,        label: 'Settings',       to: '/settings' },
   ]
 

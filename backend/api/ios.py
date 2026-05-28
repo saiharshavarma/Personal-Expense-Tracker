@@ -2,16 +2,26 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import get_current_user
+from config import settings
 from db.database import get_db
 from db.models import Transaction
 from services.dedup import compute_duplicate_hash
 
 router = APIRouter(tags=["ios"])
+
+
+async def _verify_ios_key(x_ios_api_key: Optional[str] = Header(default=None)) -> None:
+    """
+    Validate the iOS API key when IOS_API_KEY is configured in .env.
+    If IOS_API_KEY is not set the endpoint remains open (local-network only).
+    """
+    if settings.ios_api_key:
+        if x_ios_api_key != settings.ios_api_key:
+            raise HTTPException(status_code=401, detail="Invalid or missing iOS API key")
 
 
 class IOSTransactionRequest(BaseModel):
@@ -26,11 +36,13 @@ class IOSTransactionRequest(BaseModel):
 async def receive_ios_transaction(
     body: IOSTransactionRequest,
     db: AsyncSession = Depends(get_db),
+    _key: None = Depends(_verify_ios_key),
 ):
     """
     Endpoint for iOS Shortcut to POST Apple Pay transactions directly.
-    No auth required (local network only, behind Docker port).
-    Accepts: merchant, amount, date, payment_method.
+    Set IOS_API_KEY in .env and include X-iOS-API-Key header in your Shortcut
+    for network-level protection. Without IOS_API_KEY this remains open
+    (only safe on a fully private/local network).
     """
     txn_date = body.date or date.today()
     dup_hash = compute_duplicate_hash(txn_date, body.amount, body.merchant)

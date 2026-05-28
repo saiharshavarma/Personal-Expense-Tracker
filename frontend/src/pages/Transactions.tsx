@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { toast } from 'sonner'
 import { Search, Filter, Plus, LayoutList, LayoutGrid, Download, ChevronLeft, ChevronRight, CreditCard, Repeat2, Zap, FileText, FileSpreadsheet, FileJson } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -41,7 +42,13 @@ export function Transactions() {
     resetFilters,
     updateTransaction,
     deleteTransaction,
+    patchTransactionLocally,
+    removeTransactionLocally,
+    restoreTransaction,
   } = useTransactionsStore()
+
+  // Pending delete timers — keyed by transaction id
+  const pendingDeletes = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   useAccounts()
 
   const [view, setView] = useState<'table' | 'card'>('table')
@@ -209,10 +216,42 @@ export function Transactions() {
     setSheetOpen(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this transaction?')) return
-    await deleteTransaction(id)
-    setSelectedIds((s) => { const n = new Set(s); n.delete(id); return n })
+  const handleDelete = (id: string) => {
+    const idx = transactions.findIndex(t => t.id === id)
+    const tx = transactions[idx]
+    if (!tx) return
+
+    // Optimistically remove from the list
+    removeTransactionLocally(id)
+    setSelectedIds(s => { const n = new Set(s); n.delete(id); return n })
+
+    // Show undo toast — actual API delete fires after the toast auto-closes
+    toast('Transaction deleted', {
+      description: `${tx.merchant ?? tx.description ?? 'Transaction'} · $${Math.abs(tx.amount).toFixed(2)}`,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          const timer = pendingDeletes.current.get(id)
+          if (timer) { clearTimeout(timer); pendingDeletes.current.delete(id) }
+          restoreTransaction(tx, idx)
+          toast.success('Deletion cancelled')
+        },
+      },
+      duration: 5000,
+    })
+
+    const timer = setTimeout(async () => {
+      pendingDeletes.current.delete(id)
+      try {
+        await deleteTransaction(id)
+      } catch {
+        // API delete failed — restore the transaction and warn
+        restoreTransaction(tx, idx)
+        toast.error('Failed to delete transaction', { description: 'The transaction has been restored.' })
+      }
+    }, 5000)
+
+    pendingDeletes.current.set(id, timer)
   }
 
   const handleAddNew = () => {
@@ -230,11 +269,39 @@ export function Transactions() {
   }
 
   const handleCategoryUpdate = async (id: string, category: string) => {
-    await updateTransaction(id, { category: category || null, subcategory: null })
+    const prev = transactions.find(t => t.id === id)
+    const prevCat = prev?.category ?? null
+    const prevSub = prev?.subcategory ?? null
+    // Optimistic update
+    patchTransactionLocally(id, { category: category || null, subcategory: null })
+    try {
+      await updateTransaction(id, { category: category || null, subcategory: null })
+    } catch {
+      patchTransactionLocally(id, { category: prevCat, subcategory: prevSub })
+      toast.error('Failed to update category')
+    }
   }
 
   const handleSubcategoryUpdate = async (id: string, subcategory: string) => {
-    await updateTransaction(id, { subcategory: subcategory || null })
+    const prev = transactions.find(t => t.id === id)?.subcategory ?? null
+    patchTransactionLocally(id, { subcategory: subcategory || null })
+    try {
+      await updateTransaction(id, { subcategory: subcategory || null })
+    } catch {
+      patchTransactionLocally(id, { subcategory: prev })
+      toast.error('Failed to update subcategory')
+    }
+  }
+
+  const handleNoteUpdate = async (id: string, note: string) => {
+    const prev = transactions.find(t => t.id === id)?.notes ?? null
+    patchTransactionLocally(id, { notes: note || null })
+    try {
+      await updateTransaction(id, { notes: note || null })
+    } catch {
+      patchTransactionLocally(id, { notes: prev })
+      toast.error('Failed to save note')
+    }
   }
 
   const refetch = () => { fetchTransactions(filters); fetchSummary(filters) }
@@ -449,6 +516,7 @@ export function Transactions() {
             onDelete={handleDelete}
             onCategoryUpdate={handleCategoryUpdate}
             onSubcategoryUpdate={handleSubcategoryUpdate}
+            onNoteUpdate={handleNoteUpdate}
             cols={cols}
             onColsChange={handleColsChange}
             colOrder={colOrder}

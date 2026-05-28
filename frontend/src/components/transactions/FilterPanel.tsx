@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RotateCcw, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { DateRangePicker, buildDateRangeFromDates } from '@/components/DateRangePicker'
 import { useAccountsStore } from '@/store'
 import {
   ALL_CATEGORIES,
@@ -13,56 +14,6 @@ import {
 import { cn } from '@/lib/utils'
 import type { TransactionFilters } from '@/types'
 
-// ── Utility: format date to YYYY-MM-DD ────────────────────────────────────────
-
-function fmt(d: Date) {
-  return d.toISOString().split('T')[0]
-}
-
-function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1)
-}
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0)
-}
-function startOfYear(d: Date) {
-  return new Date(d.getFullYear(), 0, 1)
-}
-function subMonths(d: Date, n: number) {
-  return new Date(d.getFullYear(), d.getMonth() - n, 1)
-}
-
-const DATE_PRESETS = [
-  {
-    label: 'This month',
-    range: () => {
-      const t = new Date()
-      return { date_from: fmt(startOfMonth(t)), date_to: fmt(t) }
-    },
-  },
-  {
-    label: 'Last month',
-    range: () => {
-      const t = new Date()
-      const prev = subMonths(t, 1)
-      return { date_from: fmt(startOfMonth(prev)), date_to: fmt(endOfMonth(prev)) }
-    },
-  },
-  {
-    label: 'Last 3M',
-    range: () => {
-      const t = new Date()
-      return { date_from: fmt(subMonths(t, 3)), date_to: fmt(t) }
-    },
-  },
-  {
-    label: 'This year',
-    range: () => {
-      const t = new Date()
-      return { date_from: fmt(startOfYear(t)), date_to: fmt(t) }
-    },
-  },
-]
 
 // ── Pill toggle group ──────────────────────────────────────────────────────────
 
@@ -172,23 +123,19 @@ interface FilterPanelProps {
 export function FilterPanel({ open, filters, onChange, onReset }: FilterPanelProps) {
   const { accounts } = useAccountsStore()
   const [local, setLocal] = useState<TransactionFilters>(filters)
-  const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
 
   useEffect(() => {
-    if (open) {
-      setLocal(filters)
-      setActiveDatePreset(null)
-    }
+    if (open) setLocal(filters)
   }, [open, filters])
 
   const set = (patch: Partial<TransactionFilters>) =>
     setLocal((f) => ({ ...f, ...patch }))
 
-  const applyPreset = (preset: (typeof DATE_PRESETS)[0]) => {
-    const range = preset.range()
-    setActiveDatePreset(preset.label)
-    set({ date_from: range.date_from, date_to: range.date_to })
-  }
+  // Derive a DateRange from local date_from/date_to for the DateRangePicker
+  const dateRange = useMemo(
+    () => buildDateRangeFromDates(local.date_from, local.date_to),
+    [local.date_from, local.date_to],
+  )
 
   const apply = () => {
     // Pass the full local state — including keys set to `undefined` (meaning "clear this filter").
@@ -219,39 +166,13 @@ export function FilterPanel({ open, filters, onChange, onReset }: FilterPanelPro
             {/* ── Date row ── */}
             <div className="px-5 pt-4 pb-3 border-b">
               <SectionLabel>Date Range</SectionLabel>
-              <div className="flex items-center gap-2 flex-wrap">
-                {DATE_PRESETS.map((p) => (
-                  <button
-                    key={p.label}
-                    type="button"
-                    onClick={() => applyPreset(p)}
-                    className={cn(
-                      'px-3 py-1 rounded-full text-xs font-medium border transition-all',
-                      activeDatePreset === p.label
-                        ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                        : 'bg-background text-muted-foreground border-border hover:border-primary/40 hover:text-foreground',
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-
-                <div className="flex items-center gap-1.5 ml-auto">
-                  <Input
-                    type="date"
-                    value={local.date_from ?? ''}
-                    onChange={(e) => { setActiveDatePreset(null); set({ date_from: e.target.value || undefined }) }}
-                    className="h-7 w-[130px] text-xs"
-                  />
-                  <span className="text-xs text-muted-foreground">to</span>
-                  <Input
-                    type="date"
-                    value={local.date_to ?? ''}
-                    onChange={(e) => { setActiveDatePreset(null); set({ date_to: e.target.value || undefined }) }}
-                    className="h-7 w-[130px] text-xs"
-                  />
-                </div>
-              </div>
+              <DateRangePicker
+                value={dateRange}
+                onChange={(r) => set({
+                  date_from: r.date_from ?? undefined,
+                  date_to:   r.date_to   ?? undefined,
+                })}
+              />
             </div>
 
             {/* ── Amount + Account + Direction ── */}

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  ChevronLeft, ChevronRight, Plus, Target, Pencil, Trash2,
+  Plus, Target, Pencil, Trash2,
   Loader2, Copy, TrendingUp, TrendingDown, Minus,
 } from 'lucide-react'
+import { MonthYearPicker } from '@/components/MonthYearPicker'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -291,9 +292,6 @@ export function Budget() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const prevMonth = () => { if (month === 1) { setMonth(12); setYear(y => y - 1) } else setMonth(m => m - 1) }
-  const nextMonth = () => { if (month === 12) { setMonth(1); setYear(y => y + 1) } else setMonth(m => m + 1) }
-
   const handleCopyPrevious = async () => {
     setCopying(true)
     setCopyMsg('')
@@ -364,17 +362,12 @@ export function Budget() {
       {/* Month selector */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="flex items-center rounded-lg border bg-card">
-            <button onClick={prevMonth} className="p-2 hover:bg-accent rounded-l-lg transition-colors">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <div className="px-4 py-2 text-sm font-medium min-w-[140px] text-center">
-              {monthName(month)} {year}
-            </div>
-            <button onClick={nextMonth} className="p-2 hover:bg-accent rounded-r-lg transition-colors">
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
+          <MonthYearPicker
+            month={month}
+            year={year}
+            onChange={(m, y) => { setMonth(m); setYear(y) }}
+            showToday={false}
+          />
           <AnimatePresence>
             {copyMsg && (
               <motion.p

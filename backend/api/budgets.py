@@ -78,6 +78,29 @@ async def create_budget(
     return _serialize(b)
 
 
+@router.put("/preferences")
+async def update_budget_preferences(
+    body: dict,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the 50/30/20 rule percentages stored in user_preferences."""
+    from datetime import datetime
+    needs = body.get("needs", 50)
+    wants = body.get("wants", 30)
+    savings = body.get("savings", 20)
+    if abs(needs + wants + savings - 100) > 0.1:
+        raise HTTPException(status_code=400, detail="needs + wants + savings must equal 100")
+
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    if prefs:
+        prefs.default_budget_rule = {"needs": needs, "wants": wants, "savings": savings}
+        prefs.updated_at = datetime.utcnow()
+        await db.commit()
+    return {"needs": needs, "wants": wants, "savings": savings}
+
+
 @router.put("/{budget_id}")
 async def update_budget(
     budget_id: uuid.UUID,
@@ -280,26 +303,3 @@ async def get_actuals(
         },
         "nws_summary": nws_summary,
     }
-
-
-@router.put("/preferences")
-async def update_budget_preferences(
-    body: dict,
-    _user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Update the 50/30/20 rule percentages stored in user_preferences."""
-    from datetime import datetime
-    needs = body.get("needs", 50)
-    wants = body.get("wants", 30)
-    savings = body.get("savings", 20)
-    if abs(needs + wants + savings - 100) > 0.1:
-        raise HTTPException(status_code=400, detail="needs + wants + savings must equal 100")
-
-    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
-    prefs = result.scalar_one_or_none()
-    if prefs:
-        prefs.default_budget_rule = {"needs": needs, "wants": wants, "savings": savings}
-        prefs.updated_at = datetime.utcnow()
-        await db.commit()
-    return {"needs": needs, "wants": wants, "savings": savings}

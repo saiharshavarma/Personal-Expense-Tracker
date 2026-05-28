@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -9,6 +8,7 @@ import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { MonthYearPicker } from '@/components/MonthYearPicker'
 import { api } from '@/utils/apiClient'
 import { formatCurrency, getCurrentMonthYear, monthName, monthNameShort } from '@/lib/utils'
 
@@ -36,6 +36,10 @@ const REIMB_COLORS: Record<string, string> = {
 function ml(year: number, month: number) {
   return monthNameShort(month) + " '" + String(year).slice(2)
 }
+
+// ── Chart theme tokens — respect dark/light mode ─────────────────────────────
+const TICK_STYLE = { fontSize: 11, fill: 'hsl(var(--muted-foreground))' }
+const GRID_COLOR = 'hsl(var(--border))'
 
 // ── Shared tooltips ──────────────────────────────────────────────────────────
 
@@ -117,9 +121,9 @@ function SpendTrendChart({ months }: { months: number }) {
             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#888" strokeOpacity={0.15} />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} />
-        <YAxis tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
         <Tooltip content={<CurrencyTooltip />} />
         <Area dataKey="total" name="Spend" stroke="#3b82f6" strokeWidth={2} fill="url(#spendGrad)" dot={false} />
@@ -146,9 +150,9 @@ function IncomeExpensesChart({ months }: { months: number }) {
   return (
     <ResponsiveContainer width="100%" height={192}>
       <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#888" strokeOpacity={0.15} />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} />
-        <YAxis tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
         <Tooltip content={<CurrencyTooltip />} />
         <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
@@ -177,10 +181,10 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
   return (
     <ResponsiveContainer width="100%" height={256}>
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#888" strokeOpacity={0.15} />
-        <XAxis type="number" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis type="number" tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
-        <YAxis dataKey="category" type="category" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} width={105} />
+        <YAxis dataKey="category" type="category" tick={TICK_STYLE} tickLine={false} axisLine={false} width={105} />
         <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(100,100,100,0.07)' }} />
         <Bar dataKey="total" name="Amount" radius={[0, 4, 4, 0]} maxBarSize={20}>
           {data.map((_: any, i: number) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
@@ -257,9 +261,9 @@ function SavingsRateChart({ months }: { months: number }) {
               <stop offset="95%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#888" strokeOpacity={0.15} />
-          <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} />
-          <YAxis tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+          <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+          <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+          <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
             tickFormatter={hasRateData
               ? (v) => `${v}%`
               : (v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v < -1000 ? '-' + (Math.abs(v) / 1000).toFixed(0) + 'k' : v}`
@@ -358,12 +362,109 @@ function TopMerchantsChart({ month, year }: { month: number; year: number }) {
   return (
     <ResponsiveContainer width="100%" height={256}>
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#888" strokeOpacity={0.15} />
-        <XAxis type="number" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis type="number" tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
-        <YAxis dataKey="merchant" type="category" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} width={110} />
+        <YAxis dataKey="merchant" type="category" tick={TICK_STYLE} tickLine={false} axisLine={false} width={110} />
         <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(100,100,100,0.07)' }} />
         <Bar dataKey="total" name="Amount" fill="#3b82f6" radius={[0, 4, 4, 0]} maxBarSize={20} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+function DayOfWeekChart({ months }: { months: number }) {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/day-of-week?months=${months}`)
+      .then(r => setData(r.data))
+      .catch(() => setData([]))
+      .finally(() => setLoading(false))
+  }, [months])
+
+  if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
+  if (!data.length) return <EmptyChart />
+
+  const maxVal = Math.max(...data.map((d: any) => d.total), 1)
+
+  return (
+    <ResponsiveContainer width="100%" height={192}>
+      <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
+          tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null
+            const d = payload[0].payload
+            return (
+              <div className="bg-popover text-popover-foreground border border-border rounded-lg px-3 py-2 shadow-lg text-xs z-50">
+                <p className="font-semibold mb-1">{label}</p>
+                <p style={{ color: payload[0].fill }}>Total: <span className="font-medium">{formatCurrency(d.total)}</span></p>
+                <p className="text-muted-foreground">Avg per tx: {formatCurrency(d.avg)}</p>
+                <p className="text-muted-foreground">{d.count} transactions</p>
+              </div>
+            )
+          }}
+        />
+        <Bar dataKey="total" name="Spend" radius={[4, 4, 0, 0]} maxBarSize={40}>
+          {data.map((d: any, i: number) => (
+            <Cell
+              key={i}
+              fill={d.total === maxVal ? '#3b82f6' : `rgba(59,130,246,${0.3 + (d.total / maxVal) * 0.7})`}
+            />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+function BudgetTrendChart({ months }: { months: number }) {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/budget-trend?months=${months}`)
+      .then(r => {
+        // Aggregate per-category rows into monthly totals.
+        // budgeted stays null until at least one category has a budget set —
+        // null renders as no bar in Recharts, which correctly distinguishes
+        // "user budgeted zero" from "user has no budget set this month".
+        const byKey: Record<string, { label: string; budgeted: number | null; actual: number }> = {}
+        for (const d of r.data) {
+          const key = `${d.year}-${String(d.month).padStart(2, '0')}`
+          if (!byKey[key]) byKey[key] = { label: ml(d.year, d.month), budgeted: null, actual: 0 }
+          byKey[key].actual += d.actual
+          if (d.budget != null) {
+            byKey[key].budgeted = (byKey[key].budgeted ?? 0) + d.budget
+          }
+        }
+        setData(Object.entries(byKey).sort(([a], [b]) => a < b ? -1 : 1).map(([, v]) => v))
+      })
+      .catch(() => setData([]))
+      .finally(() => setLoading(false))
+  }, [months])
+
+  if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
+  if (!data.length) return <EmptyChart />
+
+  return (
+    <ResponsiveContainer width="100%" height={192}>
+      <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
+          tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
+        <Tooltip content={<CurrencyTooltip />} />
+        <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+        <Bar dataKey="budgeted" name="Budgeted" fill="#94a3b8" radius={[3, 3, 0, 0]} maxBarSize={24} />
+        <Bar dataKey="actual" name="Actual" fill="#3b82f6" radius={[3, 3, 0, 0]} maxBarSize={24} />
       </BarChart>
     </ResponsiveContainer>
   )
@@ -391,9 +492,9 @@ function ReimbursementChart() {
   return (
     <ResponsiveContainer width="100%" height={192}>
       <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#888" strokeOpacity={0.15} />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false} />
-        <YAxis tick={{ fontSize: 11, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
         <Tooltip content={<CurrencyTooltip />} />
         <Bar dataKey="total" name="Amount" radius={[3, 3, 0, 0]} maxBarSize={48}>
@@ -439,16 +540,6 @@ export function Analytics() {
   const [year, setYear] = useState(curYear)
   const [trendMonths, setTrendMonths] = useState(6)
 
-  const prevMonth = () => {
-    if (month === 1) { setMonth(12); setYear(y => y - 1) }
-    else setMonth(m => m - 1)
-  }
-  const nextMonth = () => {
-    if (month === 12) { setMonth(1); setYear(y => y + 1) }
-    else setMonth(m => m + 1)
-  }
-  const isCurrentMonth = month === curMonth && year === curYear
-
   return (
     <MainLayout>
       {/* Header */}
@@ -477,28 +568,11 @@ export function Analytics() {
           </div>
 
           {/* Month picker for snapshot charts */}
-          <div className="flex items-center rounded-lg border bg-card">
-            <button onClick={prevMonth} className="p-2 hover:bg-accent rounded-l-lg transition-colors">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <div className="px-3 py-1.5 text-xs font-medium min-w-[110px] text-center">
-              {monthName(month)} {year}
-            </div>
-            <button
-              onClick={nextMonth}
-              disabled={isCurrentMonth}
-              className="p-2 hover:bg-accent rounded-r-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          {!isCurrentMonth && (
-            <Button variant="ghost" size="sm" className="text-xs h-8"
-              onClick={() => { setMonth(curMonth); setYear(curYear) }}>
-              This month
-            </Button>
-          )}
+          <MonthYearPicker
+            month={month}
+            year={year}
+            onChange={(m, y) => { setMonth(m); setYear(y) }}
+          />
         </div>
       </div>
 
@@ -551,6 +625,18 @@ export function Analytics() {
             </div>
             <ChartCard title="Recurring vs One-time" subtitle={`${monthName(month)} ${year}`}>
               <RecurringDonut month={month} year={year} />
+            </ChartCard>
+          </div>
+        </Section>
+
+        {/* ── Spending Behavior ── */}
+        <Section title="Spending Behavior" emoji="🗓️">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ChartCard title="Spend by Day of Week" subtitle={`Last ${trendMonths} months — intensity shows relative spend`}>
+              <DayOfWeekChart months={trendMonths} />
+            </ChartCard>
+            <ChartCard title="Budget vs Actual" subtitle={`Last ${trendMonths} months — all categories combined`}>
+              <BudgetTrendChart months={trendMonths} />
             </ChartCard>
           </div>
         </Section>

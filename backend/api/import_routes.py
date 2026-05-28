@@ -241,6 +241,10 @@ async def upload_pdf(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files accepted on this endpoint.")
     file_bytes = await file.read()
+    if len(file_bytes) > 50_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
+    if not file_bytes.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
     return await _ingest_file(file_bytes, file.filename, account_id, db)
 
 
@@ -254,6 +258,16 @@ async def upload_csv(
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files accepted on this endpoint.")
     file_bytes = await file.read()
+    if len(file_bytes) > 50_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
+    # Reject obvious binary files — CSV must be UTF-8 or Latin-1 text
+    try:
+        file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            file_bytes.decode("latin-1")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File does not appear to be a valid CSV (encoding error).")
     return await _ingest_file(file_bytes, file.filename, account_id, db)
 
 

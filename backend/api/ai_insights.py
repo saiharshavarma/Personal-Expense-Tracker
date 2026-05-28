@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date as date_type
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,8 +15,28 @@ router = APIRouter(tags=["ai"])
 
 class QueryRequest(BaseModel):
     question: str
+    # Legacy: single month selector
     month: Optional[int] = None
     year: Optional[int] = None
+    # Flexible date range (takes precedence over month/year when provided)
+    date_from: Optional[str] = None   # YYYY-MM-DD
+    date_to: Optional[str] = None     # YYYY-MM-DD
+
+
+class AdvisorRequest(BaseModel):
+    month: Optional[int] = None
+    year: Optional[int] = None
+    date_from: Optional[str] = None   # YYYY-MM-DD
+    date_to: Optional[str] = None     # YYYY-MM-DD
+
+
+def _parse_date(s: Optional[str]) -> Optional[date_type]:
+    if not s:
+        return None
+    try:
+        return date_type.fromisoformat(s)
+    except ValueError:
+        return None
 
 
 class CategorizeRequest(BaseModel):
@@ -73,12 +93,59 @@ async def query_insights(
 
     from services.ai.insights import query_insights as _query
     try:
-        data = await _query(body.question, db, ai_provider, month=body.month, year=body.year)
+        data = await _query(
+            body.question, db, ai_provider,
+            month=body.month, year=body.year,
+            date_from=_parse_date(body.date_from),
+            date_to=_parse_date(body.date_to),
+        )
         return data
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI query failed: {e}")
+
+
+@router.post("/advisor")
+async def financial_advisor(
+    body: AdvisorRequest,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Proactive AI financial strategy advisor.
+    Analyzes the user's aggregated financial data and returns structured
+    actionable advice: expense reductions, wealth building, habits, and
+    a 4-week action plan. NEVER sends raw transactions or merchant names.
+    """
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    if not prefs or not prefs.ai_insights_opt_in:
+        raise HTTPException(
+            status_code=403,
+            detail="AI insights not enabled. Enable it in Settings → AI Configuration."
+        )
+
+    ai_provider = await _get_ai_provider(db)
+    if not ai_provider:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI provider configured. Add an Anthropic or OpenAI API key in Settings."
+        )
+
+    from services.ai.insights import generate_financial_advice
+    try:
+        data = await generate_financial_advice(
+            db, ai_provider,
+            month=body.month, year=body.year,
+            date_from=_parse_date(body.date_from),
+            date_to=_parse_date(body.date_to),
+        )
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Advisor failed: {e}")
 
 
 @router.post("/categorize")

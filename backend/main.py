@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.database import engine, Base
 from api import auth, accounts, transactions, budgets, reimbursements, \
-    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences
+    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences, rules
 
 
 @asynccontextmanager
@@ -26,10 +26,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-iOS-API-Key"],
 )
 
 
@@ -52,3 +52,4 @@ app.include_router(ai_insights.router, prefix="/api/ai")
 app.include_router(export.router, prefix="/api/export")
 app.include_router(backup.router, prefix="/api/backup")
 app.include_router(preferences.router, prefix="/api/preferences")
+app.include_router(rules.router, prefix="/api/rules")

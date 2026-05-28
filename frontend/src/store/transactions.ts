@@ -21,6 +21,12 @@ interface TransactionsStore {
   resetFilters: () => void
   addTransaction: (data: Partial<Transaction>) => Promise<Transaction>
   updateTransaction: (id: string, data: Partial<Transaction>) => Promise<Transaction>
+  /** Patch local state only — no API call. Use for optimistic updates. */
+  patchTransactionLocally: (id: string, data: Partial<Transaction>) => void
+  /** Remove from local state without API call. Pair with restoreTransaction for undo. */
+  removeTransactionLocally: (id: string) => void
+  /** Prepend a transaction back (undo a local remove). */
+  restoreTransaction: (tx: Transaction, index: number) => void
   deleteTransaction: (id: string) => Promise<void>
   bulkAction: (ids: string[], action: BulkActionPayload) => Promise<void>
 }
@@ -82,12 +88,29 @@ export const useTransactionsStore = create<TransactionsStore>((set, get) => ({
     return data
   },
 
-  deleteTransaction: async (id) => {
-    await api.delete(`/transactions/${id}`)
+  patchTransactionLocally: (id, data) => {
+    set((s) => ({ transactions: s.transactions.map((t) => (t.id === id ? { ...t, ...data } : t)) }))
+  },
+
+  removeTransactionLocally: (id) => {
     set((s) => ({
       transactions: s.transactions.filter((t) => t.id !== id),
-      total: s.total - 1,
+      total: Math.max(s.total - 1, 0),
     }))
+  },
+
+  restoreTransaction: (tx, index) => {
+    set((s) => {
+      const txns = s.transactions.filter((t) => t.id !== tx.id)
+      txns.splice(Math.min(index, txns.length), 0, tx)
+      return { transactions: txns, total: s.total + 1 }
+    })
+  },
+
+  deleteTransaction: async (id) => {
+    // Only calls the API — local state is managed separately via
+    // removeTransactionLocally (optimistic) and restoreTransaction (undo).
+    await api.delete(`/transactions/${id}`)
   },
 
   bulkAction: async (ids, { action, payload = {} }) => {

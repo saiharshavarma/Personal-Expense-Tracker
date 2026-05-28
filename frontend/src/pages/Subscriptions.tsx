@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -150,7 +151,7 @@ function SubscriptionSheet({
           </div>
           <div>
             <Label>Next Billing Date</Label>
-            <Input className="mt-1" type="date" value={form.next_billing_date} onChange={(e) => set('next_billing_date', e.target.value)} />
+            <DateInput className="mt-1" value={form.next_billing_date} onChange={(e) => set('next_billing_date', e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

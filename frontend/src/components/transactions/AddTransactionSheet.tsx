@@ -3,6 +3,7 @@ import { AlertCircle, ClipboardList } from 'lucide-react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -231,8 +232,7 @@ export function AddTransactionSheet({ open, onOpenChange, transaction }: Props) 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Date *</Label>
-              <Input
-                type="date"
+              <DateInput
                 value={form.date}
                 onChange={(e) => set('date', e.target.value)}
                 className={`mt-1 ${errors.date ? 'border-destructive' : ''}`}

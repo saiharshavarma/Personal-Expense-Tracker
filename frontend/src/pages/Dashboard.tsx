@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
-  ChevronLeft, ChevronRight, TrendingUp, TrendingDown, DollarSign,
+  TrendingUp, TrendingDown, DollarSign,
   CreditCard, RefreshCw, AlertCircle, ArrowUpRight, ArrowDownRight,
-  Upload, BarChart2, Brain, Sparkles, CheckCircle2,
+  Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target,
 } from 'lucide-react'
+import { MonthYearPicker } from '@/components/MonthYearPicker'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   Cell, ResponsiveContainer,
@@ -162,6 +163,230 @@ function StatCard({ title, value, sub, trend, icon: Icon, iconColor = 'text-prim
   )
 }
 
+// ── Projection widget ────────────────────────────────────────────────────────
+
+interface ProjectionData {
+  spent_so_far: number
+  projected_total: number
+  avg_daily_spend: number
+  days_elapsed: number
+  days_remaining: number
+  days_in_month: number
+}
+
+function ProjectionWidget({ month, year }: { month: number; year: number }) {
+  const [data, setData] = useState<ProjectionData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/projections?month=${month}&year=${year}`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [month, year])
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center">
+            <Target className="w-3.5 h-3.5 text-violet-500" />
+          </div>
+          <p className="text-xs font-medium">Month-end Projection</p>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="h-2 w-full rounded-full" />
+            <Skeleton className="h-2.5 w-20" />
+          </div>
+        ) : data ? (
+          <>
+            <p className="text-xl font-bold">{formatCurrency(data.projected_total)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {formatCurrency(data.spent_so_far)} spent · {Math.max(data.days_remaining, 0)}d left
+            </p>
+            {/* Progress bar: spent vs projected — guard against projected_total = 0 */}
+            <div className="mt-2.5 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-violet-500 transition-all"
+                style={{
+                  width: `${data.projected_total > 0
+                    ? Math.min((data.spent_so_far / data.projected_total) * 100, 100)
+                    : 0}%`,
+                }}
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1.5">
+              ~{formatCurrency(data.avg_daily_spend)}/day avg
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">—</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Health score widget ──────────────────────────────────────────────────────
+
+interface HealthScoreData {
+  score: number
+  savings_score: number
+  budget_score: number
+  review_score: number
+  savings_rate: number
+  budget_adherence_pct: number
+  review_completion_pct: number
+}
+
+function HealthScoreWidget({ month, year }: { month: number; year: number }) {
+  const [data, setData] = useState<HealthScoreData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/health-score?month=${month}&year=${year}`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [month, year])
+
+  const scoreColor = (score: number) =>
+    score >= 80 ? 'text-green-500' : score >= 55 ? 'text-amber-500' : 'text-red-500'
+  const barColor = (score: number) =>
+    score >= 80 ? 'bg-green-500' : score >= 55 ? 'bg-amber-500' : 'bg-red-500'
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-7 h-7 rounded-lg bg-green-500/10 flex items-center justify-center">
+            <Heart className="w-3.5 h-3.5 text-green-500" />
+          </div>
+          <p className="text-xs font-medium">Financial Health</p>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-1.5 w-full rounded-full" />
+          </div>
+        ) : data ? (
+          <>
+            <div className="flex items-baseline gap-1">
+              <span className={`text-3xl font-bold ${scoreColor(data.score)}`}>{data.score}</span>
+              <span className="text-xs text-muted-foreground">/100</span>
+            </div>
+            <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${barColor(data.score)}`}
+                style={{ width: `${data.score}%` }}
+              />
+            </div>
+            <div className="mt-2.5 space-y-1">
+              {[
+                { label: 'Savings', val: data.savings_score, max: 40 },
+                { label: 'Budgets', val: data.budget_score, max: 30 },
+                { label: 'Review',  val: data.review_score,  max: 30 },
+              ].map(({ label, val, max }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground w-12">{label}</span>
+                  <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full rounded-full bg-primary/60" style={{ width: `${(val / max) * 100}%` }} />
+                  </div>
+                  <span className="text-[10px] text-muted-foreground w-8 text-right">{Math.round(val)}/{max}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">—</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Spend velocity widget ────────────────────────────────────────────────────
+
+interface SpendVelocityData {
+  current_rate: number
+  historical_rate: number | null
+  pct_change: number | null
+  days_elapsed: number
+  month_total: number
+}
+
+function SpendVelocityWidget() {
+  const [data, setData] = useState<SpendVelocityData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get('/analytics/spend-velocity')
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const isAccelerating = (data?.pct_change ?? 0) > 5
+  const isDecelerating = (data?.pct_change ?? 0) < -5
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className={cn(
+            'w-7 h-7 rounded-lg flex items-center justify-center',
+            isAccelerating ? 'bg-red-500/10' : isDecelerating ? 'bg-green-500/10' : 'bg-blue-500/10'
+          )}>
+            <Zap className={cn('w-3.5 h-3.5', isAccelerating ? 'text-red-500' : isDecelerating ? 'text-green-500' : 'text-blue-500')} />
+          </div>
+          <p className="text-xs font-medium">Spend Velocity</p>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="h-2.5 w-36" />
+          </div>
+        ) : data ? (
+          <>
+            <p className="text-xl font-bold">{formatCurrency(data.current_rate)}<span className="text-xs font-normal text-muted-foreground">/day</span></p>
+            {data.historical_rate != null && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                avg {formatCurrency(data.historical_rate)}/day historically
+              </p>
+            )}
+            {data.pct_change != null && (
+              <div className={cn(
+                'flex items-center gap-0.5 text-xs font-medium mt-1.5',
+                isAccelerating ? 'text-red-500' : isDecelerating ? 'text-green-500' : 'text-muted-foreground'
+              )}>
+                {isAccelerating
+                  ? <ArrowUpRight className="w-3.5 h-3.5" />
+                  : isDecelerating
+                  ? <ArrowDownRight className="w-3.5 h-3.5" />
+                  : null}
+                {Math.abs(data.pct_change).toFixed(1)}%
+                {isAccelerating ? ' faster than usual' : isDecelerating ? ' slower than usual' : ' on track'}
+              </div>
+            )}
+            <p className="text-[10px] text-muted-foreground mt-1">{data.days_elapsed} days tracked</p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">—</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Chart theme tokens ────────────────────────────────────────────────────────
+const DASH_TICK_SM  = { fontSize: 10, fill: 'hsl(var(--muted-foreground))' }
+const DASH_GRID     = 'hsl(var(--border))'
+
 // ── Category bar chart ───────────────────────────────────────────────────────
 
 function CategoryBarChart({ month, year }: { month: number; year: number }) {
@@ -186,10 +411,10 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
   return (
     <ResponsiveContainer width="100%" height={192}>
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#888" strokeOpacity={0.12} />
-        <XAxis type="number" tick={{ fontSize: 10, fill: '#888' }} tickLine={false} axisLine={false}
+        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={DASH_GRID} strokeOpacity={0.4} />
+        <XAxis type="number" tick={DASH_TICK_SM} tickLine={false} axisLine={false}
           tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
-        <YAxis dataKey="category" type="category" tick={{ fontSize: 10, fill: '#888' }} tickLine={false} axisLine={false} width={100} />
+        <YAxis dataKey="category" type="category" tick={DASH_TICK_SM} tickLine={false} axisLine={false} width={100} />
         <Tooltip
           formatter={(v: number) => [formatCurrency(v), 'Spend']}
           contentStyle={{ fontSize: 11, borderRadius: 8 }}
@@ -278,16 +503,6 @@ export function Dashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
 
-  const prevMonth = () => {
-    if (month === 1) { setMonth(12); setYear(y => y - 1) }
-    else setMonth(m => m - 1)
-  }
-  const nextMonth = () => {
-    if (month === 12) { setMonth(1); setYear(y => y + 1) }
-    else setMonth(m => m + 1)
-  }
-  const isCurrentMonth = month === currentMonth && year === currentYear
-
   useEffect(() => {
     setSummaryLoading(true)
     api.get(`/analytics/dashboard-summary?month=${month}&year=${year}`)
@@ -306,28 +521,11 @@ export function Dashboard() {
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">Your financial overview at a glance</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center rounded-lg border bg-card">
-            <button onClick={prevMonth} className="p-2 hover:bg-accent rounded-l-lg transition-colors">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <div className="px-4 py-2 text-sm font-medium min-w-[140px] text-center">
-              {monthName(month)} {year}
-            </div>
-            <button
-              onClick={nextMonth}
-              disabled={isCurrentMonth}
-              className="p-2 hover:bg-accent rounded-r-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-          {!isCurrentMonth && (
-            <Button variant="ghost" size="sm" onClick={() => { setMonth(currentMonth); setYear(currentYear) }}>
-              Today
-            </Button>
-          )}
-        </div>
+        <MonthYearPicker
+          month={month}
+          year={year}
+          onChange={(m, y) => { setMonth(m); setYear(y) }}
+        />
       </div>
 
       {/* ── KPI row ── */}
@@ -459,6 +657,18 @@ export function Dashboard() {
           </div>
         </motion.div>
       </div>
+
+      {/* ── Insights row: projection / health / velocity ── */}
+      <motion.div
+        className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.22 }}
+      >
+        <ProjectionWidget month={month} year={year} />
+        <HealthScoreWidget month={month} year={year} />
+        <SpendVelocityWidget />
+      </motion.div>
 
       {/* ── Getting started (shown when no transactions yet) ── */}
       {!summaryLoading && (summary?.transaction_count ?? 0) === 0 && <GettingStarted />}

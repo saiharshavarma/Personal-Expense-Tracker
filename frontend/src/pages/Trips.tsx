@@ -3,9 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plane, Plus, MapPin, Calendar, DollarSign,
   Pencil, Trash2, ChevronRight, X, Briefcase, User,
-  TrendingUp, Package, Tag, Search, Check, AlertCircle,
+  TrendingUp, Package, Tag, Search, Check, AlertCircle, Loader2, Zap,
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -142,11 +143,11 @@ function TripFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Start Date</Label>
-              <Input className="mt-1" type="date" value={form.start_date} onChange={(e) => set('start_date', e.target.value)} />
+              <DateInput className="mt-1" value={form.start_date} onChange={(e) => set('start_date', e.target.value)} />
             </div>
             <div>
               <Label>End Date</Label>
-              <Input className="mt-1" type="date" value={form.end_date} onChange={(e) => set('end_date', e.target.value)} />
+              <DateInput className="mt-1" value={form.end_date} onChange={(e) => set('end_date', e.target.value)} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -207,6 +208,8 @@ function TripDetailSheet({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [tagging, setTagging] = useState(false)
   const [tagSearch, setTagSearch] = useState('')
+  const [autoTagging, setAutoTagging] = useState(false)
+  const [autoTagMsg, setAutoTagMsg] = useState<string | null>(null)
 
   const loadExpenses = async () => {
     if (!trip) return
@@ -257,6 +260,24 @@ function TripDetailSheet({
     await api.put(`/transactions/${txnId}`, { business_trip_id: null })
     await loadExpenses()
     if (tab === 'tag') await loadCandidates()
+  }
+
+  const handleAutoTag = async () => {
+    if (!trip) return
+    setAutoTagging(true)
+    setAutoTagMsg(null)
+    try {
+      const r = await api.post(`/trips/${trip.id}/auto-tag`)
+      const count = r.data.tagged_count as number
+      setAutoTagMsg(count > 0
+        ? `✓ Auto-tagged ${count} transaction${count === 1 ? '' : 's'} within the trip date range.`
+        : 'No untagged transactions found within the trip date range.')
+      await loadExpenses()
+    } catch {
+      setAutoTagMsg('Auto-tag failed. Make sure the trip has start and end dates.')
+    } finally {
+      setAutoTagging(false)
+    }
   }
 
   const toggleSelect = (id: string) => {
@@ -385,6 +406,26 @@ function TripDetailSheet({
               </Card>
             )}
 
+            {/* ── Auto-tag banner ── */}
+            {trip?.start_date && trip?.end_date && (
+              <div className="flex items-center gap-2 mb-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleAutoTag}
+                  disabled={autoTagging}
+                  className="text-xs h-7 gap-1.5"
+                >
+                  {autoTagging
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Auto-tagging…</>
+                    : <><Zap className="w-3 h-3 text-primary" /> Auto-tag by Date</>}
+                </Button>
+                {autoTagMsg && (
+                  <span className="text-xs text-muted-foreground">{autoTagMsg}</span>
+                )}
+              </div>
+            )}
+
             {/* ── Tabs ── */}
             <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit mb-4 flex-shrink-0">
               {([
@@ -448,10 +489,18 @@ function TripDetailSheet({
                     <div className="flex flex-col items-center py-10 text-center text-muted-foreground">
                       <Package className="w-8 h-8 mb-2 opacity-40" />
                       <p className="text-sm font-medium">No expenses tagged yet</p>
-                      <p className="text-xs mt-1">Use the "Tag Transactions" tab to link your transactions</p>
-                      <Button size="sm" variant="outline" className="mt-3" onClick={() => setTab('tag')}>
-                        <Tag className="w-3.5 h-3.5" /> Tag Transactions
-                      </Button>
+                      <p className="text-xs mt-1 mb-3">Auto-tag all transactions within the trip date range, or manually pick them.</p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setTab('tag')}>
+                          <Tag className="w-3.5 h-3.5 mr-1" /> Tag Manually
+                        </Button>
+                        {trip?.start_date && trip?.end_date && (
+                          <Button size="sm" onClick={handleAutoTag} disabled={autoTagging}>
+                            {autoTagging ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Tagging…</> : <><Zap className="w-3.5 h-3.5 mr-1" /> Auto-tag by Date</>}
+                          </Button>
+                        )}
+                      </div>
+                      {autoTagMsg && <p className="text-xs mt-2 text-foreground">{autoTagMsg}</p>}
                     </div>
                   ) : (
                     <div className="divide-y rounded-xl border overflow-hidden">

@@ -9,11 +9,9 @@ import { TopBar } from '@/components/layout/TopBar'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DateRangePicker, defaultRange, type DateRange } from '@/components/DateRangePicker'
 import { usePreferencesStore } from '@/store'
 import { api } from '@/utils/apiClient'
-import { getCurrentMonthYear, monthName } from '@/lib/utils'
-
-const { month: curMonth, year: curYear } = getCurrentMonthYear()
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -210,8 +208,7 @@ export function AskAI() {
   const [query, setQuery] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isTyping, setIsTyping] = useState(false)
-  const [month, setMonth] = useState(curMonth)
-  const [year, setYear] = useState(curYear)
+  const [range, setRange] = useState<DateRange>(defaultRange)
   const chatBottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -242,7 +239,11 @@ export function AskAI() {
     setIsTyping(true)
 
     try {
-      const res = await api.post('/ai/query', { question: q, month, year })
+      const res = await api.post('/ai/query', {
+        question: q,
+        date_from: range.date_from,
+        date_to: range.date_to,
+      })
       const answer = res.data.answer ?? 'No response received.'
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -299,29 +300,15 @@ export function AskAI() {
       ) : (
         <AnimatePresence mode="wait">
           <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-            {/* Context period selector */}
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">Analyzing:</span>
-              <select
-                value={`${year}-${month}`}
-                onChange={e => {
-                  const [y, m] = e.target.value.split('-').map(Number)
-                  setYear(y); setMonth(m)
-                }}
-                className="rounded border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {Array.from({ length: 12 }, (_, i) => {
-                  const d = new Date(curYear, curMonth - 1 - i, 1)
-                  const m = d.getMonth() + 1
-                  const y = d.getFullYear()
-                  return (
-                    <option key={`${y}-${m}`} value={`${y}-${m}`}>
-                      {monthName(m)} {y}
-                    </option>
-                  )
-                })}
-              </select>
-              <span>— data only for this period</span>
+            {/* Date range selector */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs font-medium text-muted-foreground">Analyzing:</span>
+              <DateRangePicker value={range} onChange={r => { setRange(r); setMessages([]) }} />
+              {messages.length === 0 && (
+                <span className="text-xs text-muted-foreground hidden sm:inline">
+                  — change period to re-focus the AI context
+                </span>
+              )}
             </div>
 
             {/* Chat history */}
@@ -392,7 +379,7 @@ export function AskAI() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Powered by {prefs?.ai_provider === 'openai' ? 'OpenAI GPT-4o' : 'Claude Sonnet'}. Aggregated data only — see privacy notice above.
+                  Powered by {prefs?.ai_provider === 'openai' ? 'OpenAI GPT-4o' : 'Claude Sonnet'} · {range.label} · Aggregated data only
                 </p>
               </CardContent>
             </Card>

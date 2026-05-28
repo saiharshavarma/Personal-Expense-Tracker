@@ -94,6 +94,41 @@ async def delete_trip(trip_id: uuid.UUID, _user=Depends(get_current_user), db: A
     await db.commit()
 
 
+@router.post("/{trip_id}/auto-tag")
+async def auto_tag_trip_expenses(
+    trip_id: uuid.UUID,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Auto-tag transactions that fall within the trip's date range.
+    Only tags transactions that are not already assigned to a trip.
+    Returns the count of newly tagged transactions.
+    """
+    trip = await db.get(Trip, trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.start_date or not trip.end_date:
+        raise HTTPException(status_code=400, detail="Trip must have both start_date and end_date to auto-tag expenses.")
+
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.date >= trip.start_date,
+            Transaction.date <= trip.end_date,
+            Transaction.direction == "debit",
+            Transaction.business_trip_id.is_(None),
+        )
+    )
+    untagged = result.scalars().all()
+
+    for t in untagged:
+        t.business_trip_id = trip_id
+        t.updated_at = datetime.utcnow()
+
+    await db.commit()
+    return {"tagged_count": len(untagged), "trip_id": str(trip_id)}
+
+
 @router.get("/{trip_id}/expenses")
 async def get_trip_expenses(trip_id: uuid.UUID, _user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     trip = await db.get(Trip, trip_id)
