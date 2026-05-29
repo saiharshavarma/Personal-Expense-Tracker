@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
 import { useUIStore } from '@/store'
-import { Sidebar } from './Sidebar'
+import { MobileNav, Sidebar } from './Sidebar'
 
 interface MainLayoutProps {
   children: React.ReactNode
@@ -20,10 +20,9 @@ export function MainLayout({ children }: MainLayoutProps) {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar />
+      <MobileNav />
       <motion.main
-        animate={{ marginLeft: sidebarCollapsed ? 64 : 240 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="min-h-screen"
+        className={`min-h-screen transition-[margin] duration-300 ease-out ${sidebarCollapsed ? 'md:ml-16' : 'md:ml-60'}`}
       >
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -32,7 +31,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             initial="initial"
             animate="animate"
             exit="exit"
-            className="max-w-[1600px] mx-auto p-6 lg:p-8"
+            className="mx-auto max-w-[1600px] px-4 py-5 pb-24 sm:px-6 md:pb-6 lg:p-8"
           >
             {children}
           </motion.div>

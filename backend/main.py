@@ -25,6 +25,14 @@ _MIGRATIONS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_budgets_cat_only ON budgets (month, year, category) WHERE subcategory IS NULL",
     # Partial index: subcategory-level budgets must be unique per (month, year, category, subcategory)
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_budgets_cat_sub ON budgets (month, year, category, subcategory) WHERE subcategory IS NOT NULL",
+    # 2026-05: Performance indexes for hot transaction query paths
+    "CREATE INDEX IF NOT EXISTS ix_transactions_date ON transactions (date DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_transactions_account_date ON transactions (account_id, date DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_transactions_category ON transactions (category) WHERE category IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_transactions_direction_date ON transactions (direction, date DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_transactions_needs_review ON transactions (needs_review) WHERE needs_review = TRUE",
+    # 2026-05: Performance index for budget actuals query
+    "CREATE INDEX IF NOT EXISTS ix_budgets_month_year ON budgets (month, year)",
 ]
 
 

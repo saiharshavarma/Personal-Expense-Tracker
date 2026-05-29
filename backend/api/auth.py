@@ -316,7 +316,8 @@ async def webauthn_register_finish(
 
 
 @router.get("/webauthn/authenticate-begin")
-async def webauthn_authenticate_begin(db: AsyncSession = Depends(get_db)):
+async def webauthn_authenticate_begin(request: Request, db: AsyncSession = Depends(get_db)):
+    _check_rate_limit(request.client.host if request.client else "unknown")
     try:
         from webauthn import generate_authentication_options, options_to_json
         from webauthn.helpers.structs import (
@@ -354,9 +355,11 @@ async def webauthn_authenticate_begin(db: AsyncSession = Depends(get_db)):
 
 @router.post("/webauthn/authenticate-finish")
 async def webauthn_authenticate_finish(
+    request: Request,
     body: WebAuthnFinishRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    _check_rate_limit(request.client.host if request.client else "unknown")
     try:
         from webauthn import verify_authentication_response
         from webauthn.helpers.structs import AuthenticationCredential, AuthenticatorAssertionResponse
@@ -409,6 +412,7 @@ async def webauthn_authenticate_finish(
         logger.warning("WebAuthn authentication failed: %s", e)
         raise HTTPException(status_code=401, detail="Touch ID verification failed")
 
+    _reset_rate_limit(request.client.host if request.client else "unknown")
     cred_data["sign_count"] = verification.new_sign_count
     cred_data.pop("pending_auth_challenge", None)
     prefs.webauthn_credential = cred_data

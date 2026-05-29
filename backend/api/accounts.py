@@ -1,9 +1,10 @@
+import re
 import uuid
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,26 +14,57 @@ from db.models import Account
 
 router = APIRouter(tags=["accounts"])
 
+_VALID_ACCOUNT_TYPES = {"checking", "savings", "credit", "investment", "loan", "cash", "other"}
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?$")
+
 
 class AccountCreate(BaseModel):
-    name: str
-    type: str
-    institution: Optional[str] = None
-    last_four: Optional[str] = None
-    currency: str = "USD"
-    color: Optional[str] = None
-    icon: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100)
+    type: str = Field(..., max_length=50)
+    institution: Optional[str] = Field(None, max_length=100)
+    last_four: Optional[str] = Field(None, min_length=4, max_length=4)
+    currency: str = Field("USD", min_length=3, max_length=3)
+    color: Optional[str] = Field(None, max_length=7)
+    icon: Optional[str] = Field(None, max_length=50)
+
+    @field_validator("last_four")
+    @classmethod
+    def validate_last_four(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.isdigit():
+            raise ValueError("last_four must be exactly 4 digits")
+        return v
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _HEX_COLOR_RE.match(v):
+            raise ValueError("color must be a valid hex color (e.g. #abc or #aabbcc)")
+        return v
 
 
 class AccountUpdate(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    institution: Optional[str] = None
-    last_four: Optional[str] = None
-    currency: Optional[str] = None
-    color: Optional[str] = None
-    icon: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    type: Optional[str] = Field(None, max_length=50)
+    institution: Optional[str] = Field(None, max_length=100)
+    last_four: Optional[str] = Field(None, min_length=4, max_length=4)
+    currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    color: Optional[str] = Field(None, max_length=7)
+    icon: Optional[str] = Field(None, max_length=50)
     is_active: Optional[bool] = None
+
+    @field_validator("last_four")
+    @classmethod
+    def validate_last_four(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.isdigit():
+            raise ValueError("last_four must be exactly 4 digits")
+        return v
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _HEX_COLOR_RE.match(v):
+            raise ValueError("color must be a valid hex color (e.g. #abc or #aabbcc)")
+        return v
 
 
 def _serialize(acct: Account) -> dict:

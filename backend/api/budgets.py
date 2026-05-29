@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, func, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,18 +16,18 @@ router = APIRouter(tags=["budgets"])
 
 
 class BudgetCreate(BaseModel):
-    month: int
-    year: int
+    month: int = Field(..., ge=1, le=12)
+    year: int = Field(..., ge=2000, le=2100)
     category: str
     subcategory: Optional[str] = None
-    budget_amount: Decimal
+    budget_amount: Decimal = Field(..., gt=0)
     needs_pct: Optional[Decimal] = None
     wants_pct: Optional[Decimal] = None
     savings_pct: Optional[Decimal] = None
 
 
 class BudgetUpdate(BaseModel):
-    budget_amount: Optional[Decimal] = None
+    budget_amount: Optional[Decimal] = Field(None, gt=0)
     needs_pct: Optional[Decimal] = None
     wants_pct: Optional[Decimal] = None
     savings_pct: Optional[Decimal] = None
@@ -97,17 +97,21 @@ async def create_budget(
     return _serialize(b)
 
 
+class BudgetRuleUpdate(BaseModel):
+    needs: float = Field(..., ge=0, le=100)
+    wants: float = Field(..., ge=0, le=100)
+    savings: float = Field(..., ge=0, le=100)
+
+
 @router.put("/preferences")
 async def update_budget_preferences(
-    body: dict,
+    body: BudgetRuleUpdate,
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Update the 50/30/20 rule percentages stored in user_preferences."""
     from datetime import datetime
-    needs = body.get("needs", 50)
-    wants = body.get("wants", 30)
-    savings = body.get("savings", 20)
+    needs, wants, savings = body.needs, body.wants, body.savings
     if abs(needs + wants + savings - 100) > 0.1:
         raise HTTPException(status_code=400, detail="Needs + wants + savings must equal 100.")
 
@@ -373,7 +377,8 @@ async def get_actuals(
     )
     income_tagged = float(income_cat_result.scalar() or 0)
 
-    # 2) Fall back to all credit transactions that aren't transfers.
+    # 2) Fall back to uncategorized credit transactions, which covers raw payroll
+    # imports before review without treating categorized refunds as income.
     # H-2: `category NOT IN (...)` evaluates to NULL when category IS NULL in SQL,
     # which silently excludes uncategorised credits from the income total.
     # Fix: explicitly OR-in the IS NULL check so NULL-category credits are included.
@@ -384,7 +389,7 @@ async def get_actuals(
                 extract("month", Transaction.date) == month,
                 extract("year", Transaction.date) == year,
                 Transaction.direction == "credit",
-                (Transaction.category.is_(None) | Transaction.category.notin_(["Transfer", "Financial"])),
+                Transaction.category.is_(None),
             )
         )
     )

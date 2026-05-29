@@ -6,6 +6,7 @@ import {
   Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target, Eye, EyeOff, ShieldAlert, Wallet,
 } from 'lucide-react'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
+import { MetricHint } from '@/components/MetricHint'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   Cell, ResponsiveContainer,
@@ -125,6 +126,7 @@ interface CategoryItem { category: string; total: number; count: number; pct: nu
 interface StatCardProps {
   title: string
   value: string
+  hint?: React.ReactNode
   sub?: string
   trend?: number | null
   icon: React.ElementType
@@ -132,14 +134,17 @@ interface StatCardProps {
   delay?: number
 }
 
-function StatCard({ title, value, sub, trend, icon: Icon, iconColor = 'text-primary', delay = 0 }: StatCardProps) {
+function StatCard({ title, value, hint, sub, trend, icon: Icon, iconColor = 'text-primary', delay = 0 }: StatCardProps) {
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay }}>
       <Card>
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-xs text-muted-foreground font-medium mb-1">{title}</p>
+              <div className="mb-1 flex items-center gap-1">
+                <p className="text-xs text-muted-foreground font-medium">{title}</p>
+                {hint && <MetricHint label={`${title} explanation`}>{hint}</MetricHint>}
+              </div>
               <p className="text-2xl font-bold tracking-tight">{value}</p>
               {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
               {trend != null && (
@@ -668,12 +673,12 @@ export function Dashboard() {
   return (
     <MainLayout>
       {/* Header + month picker */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">Your financial overview at a glance</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
           <Button
             variant={excludeReimbursable ? 'default' : 'outline'}
             size="sm"
@@ -712,6 +717,7 @@ export function Dashboard() {
             <StatCard
               title="Total Spend"
               value={formatCurrency(summary.expenses)}
+              hint="Total debit spending in the selected month. Use the reimbursement toggle to compare gross spend with personal-only spend."
               trend={summary.mom_change_pct}
               icon={CreditCard}
               delay={0}
@@ -719,6 +725,7 @@ export function Dashboard() {
             <StatCard
               title="Income"
               value={formatCurrency(summary.income)}
+              hint="Credits tagged as Income, plus uncategorized credits only when no Income-tagged credits exist. Refunds and transfers should not inflate this."
               sub={`${summary.transaction_count} transactions`}
               icon={DollarSign}
               iconColor="text-green-500"
@@ -727,6 +734,7 @@ export function Dashboard() {
             <StatCard
               title="Savings"
               value={`${savingsSign}${formatCurrency(summary.savings)}`}
+              hint="Income minus spend for the selected month. A positive number means you kept more than you spent; the savings rate is this amount divided by income."
               sub={summary.savings_rate != null ? `${summary.savings_rate}% savings rate` : 'No income recorded'}
               icon={summary.savings >= 0 ? TrendingUp : TrendingDown}
               iconColor={summary.savings >= 0 ? 'text-green-500' : 'text-red-500'}
@@ -735,6 +743,7 @@ export function Dashboard() {
             <StatCard
               title="Needs Review"
               value={String(summary.needs_review_count)}
+              hint="Transactions with missing or low-confidence categorization. Review these first because they affect budgets, analytics, and AI learning."
               sub={summary.needs_review_count === 0 ? 'All caught up!' : 'transactions'}
               icon={AlertCircle}
               iconColor={summary.needs_review_count > 0 ? 'text-amber-500' : 'text-green-500'}
@@ -754,7 +763,10 @@ export function Dashboard() {
         <motion.div className="lg:col-span-2" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
           <Card className="h-full">
             <CardHeader className="pb-2 pt-4 px-5">
-              <CardTitle className="text-sm font-medium">Spend by Category</CardTitle>
+              <div className="flex items-center gap-1">
+                <CardTitle className="text-sm font-medium">Spend by Category</CardTitle>
+                <MetricHint label="Spend by Category explanation">Shows where this month&apos;s spend is concentrated. Large categories are the best places to inspect for unusual merchants or budget pressure.</MetricHint>
+              </div>
               <p className="text-xs text-muted-foreground">{monthName(month)} {year}</p>
             </CardHeader>
             <CardContent className="pb-4 px-5">
@@ -772,6 +784,7 @@ export function Dashboard() {
                 <div className="flex items-center gap-2 mb-2">
                   <RefreshCw className="w-4 h-4 text-blue-500" />
                   <p className="text-xs font-medium">Recurring Costs</p>
+                  <MetricHint label="Recurring Costs explanation">Monthly spend marked as recurring, such as rent, subscriptions, utilities, or memberships. This is your baseline cost before flexible spending.</MetricHint>
                 </div>
                 {summaryLoading
                   ? <Skeleton className="h-6 w-28" />
@@ -784,7 +797,10 @@ export function Dashboard() {
             {/* Top category */}
             <Card>
               <CardContent className="p-4">
-                <p className="text-xs font-medium text-muted-foreground mb-1.5">Top Category</p>
+                <div className="mb-1.5 flex items-center gap-1">
+                  <p className="text-xs font-medium text-muted-foreground">Top Category</p>
+                  <MetricHint label="Top Category explanation">The single category with the highest spend this month. If it looks wrong, review transactions in that category for misclassification.</MetricHint>
+                </div>
                 {summaryLoading ? (
                   <Skeleton className="h-5 w-32" />
                 ) : summary?.top_category ? (
@@ -806,6 +822,7 @@ export function Dashboard() {
                 <div className="flex items-center gap-2 mb-2">
                   <DollarSign className="w-4 h-4 text-amber-500" />
                   <p className="text-xs font-medium">Pending Reimbursements</p>
+                  <MetricHint label="Pending Reimbursements explanation">Expected reimbursement still in to-submit or submitted status. Use this to track money you are owed but have not received yet.</MetricHint>
                 </div>
                 {summaryLoading ? (
                   <Skeleton className="h-6 w-28" />

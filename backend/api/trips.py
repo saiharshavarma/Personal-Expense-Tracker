@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,12 @@ class TripCreate(BaseModel):
     expense_tool: Optional[str] = None
     expense_tool_reference: Optional[str] = None
     notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "TripCreate":
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
 
 
 class TripUpdate(TripCreate):

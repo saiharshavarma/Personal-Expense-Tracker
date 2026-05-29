@@ -3,7 +3,7 @@ from datetime import datetime, date as date_type
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class QueryRequest(BaseModel):
-    question: str
+    question: str = Field(..., max_length=1000)
     # Legacy: single month selector
     month: Optional[int] = None
     year: Optional[int] = None
@@ -46,7 +46,7 @@ def _parse_date(s: Optional[str]) -> Optional[date_type]:
 
 
 class CategorizeRequest(BaseModel):
-    transaction_ids: List[str]
+    transaction_ids: List[str] = Field(..., max_length=200)
 
 
 async def _get_ai_provider(db: AsyncSession):
@@ -259,10 +259,10 @@ async def categorize_transactions_endpoint(
 # ── Mascot comment ─────────────────────────────────────────────────────────────
 
 class MascotCommentRequest(BaseModel):
-    page: str
+    page: str = Field(..., max_length=100)
     month: Optional[int] = None
     year: Optional[int] = None
-    screen_text: Optional[str] = None   # visible text near the mascot on screen
+    screen_text: Optional[str] = Field(None, max_length=500)  # visible text near the mascot on screen
 
 
 @router.post("/mascot")

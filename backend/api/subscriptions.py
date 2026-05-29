@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ router = APIRouter(tags=["subscriptions"])
 
 class SubscriptionCreate(BaseModel):
     name: str
-    amount: Decimal
+    amount: Decimal = Field(..., gt=0)
     billing_frequency: Optional[str] = None
     next_billing_date: Optional[date] = None
     category: Optional[str] = None
@@ -32,7 +32,7 @@ class SubscriptionCreate(BaseModel):
 
 class SubscriptionUpdate(SubscriptionCreate):
     name: Optional[str] = None
-    amount: Optional[Decimal] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
     is_active: Optional[bool] = None
 
 

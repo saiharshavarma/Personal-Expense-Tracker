@@ -319,7 +319,7 @@ export function Reimbursements() {
       />
 
       {/* Summary row */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 gap-3 mb-6 sm:grid-cols-3 lg:grid-cols-5 lg:gap-4">
         {SUMMARY.map(({ label, amount, count, color }, i) => (
           <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
             <Card>
@@ -339,7 +339,8 @@ export function Reimbursements() {
       </div>
 
       {/* Kanban board */}
-      <div className="grid grid-cols-6 gap-3">
+      <div className="overflow-x-auto pb-2">
+      <div className="grid min-w-[960px] grid-cols-6 gap-3">
         {COLUMNS.map(({ id, label, icon: Icon, color, headerColor }, ci) => {
           const items = activePipeline[id]
           const isDragTarget = dragOver === id
@@ -389,6 +390,7 @@ export function Reimbursements() {
             </motion.div>
           )
         })}
+      </div>
       </div>
 
       {/* Settled History */}

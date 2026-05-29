@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
+import { MetricHint } from '@/components/MetricHint'
 import { api } from '@/utils/apiClient'
 import { cn, formatCurrency, getCurrentMonthYear, monthName, monthNameShort } from '@/lib/utils'
 import { useUIStore } from '@/store/ui'
@@ -664,11 +665,13 @@ function SignalMetricCard({
   title,
   value,
   detail,
+  hint,
   tone,
 }: {
   title: string
   value: string
   detail: string
+  hint?: React.ReactNode
   tone: 'good' | 'warn' | 'bad' | 'info'
 }) {
   const color = {
@@ -681,7 +684,10 @@ function SignalMetricCard({
   return (
     <Card>
       <CardContent className="p-4">
-        <p className="text-xs font-medium text-muted-foreground">{title}</p>
+        <div className="flex items-center gap-1">
+          <p className="text-xs font-medium text-muted-foreground">{title}</p>
+          {hint && <MetricHint label={`${title} explanation`}>{hint}</MetricHint>}
+        </div>
         <p className={cn('mt-2 text-2xl font-semibold tabular-nums', color)}>{value}</p>
         <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{detail}</p>
       </CardContent>
@@ -803,24 +809,28 @@ function DecisionSignalsPanel({
         <SignalMetricCard
           title="Spend Anomaly"
           value={pctLabel(data.spend_anomaly_pct)}
+          hint="Compares your projected month-end spend with your recent normal monthly spend. Positive values mean this month is running hotter than usual."
           detail={`Projected ${formatCurrency(data.projected_spend)} vs normal ${data.median_monthly_spend ? formatCurrency(data.median_monthly_spend) : 'baseline unavailable'}.`}
           tone={anomalyTone}
         />
         <SignalMetricCard
           title="Fixed-Cost Lock"
           value={data.fixed_income_pct == null ? 'No income' : `${data.fixed_income_pct.toFixed(1)}%`}
+          hint="The share of income already committed to recurring or fixed costs. A higher lock leaves less room for flexible spending and surprises."
           detail={`${formatCurrency(data.fixed_commitments)} is already committed before flexible spending.`}
           tone={fixedTone}
         />
         <SignalMetricCard
           title="Spend Volatility"
           value={data.volatility_pct == null ? 'Not enough history' : `${data.volatility_pct.toFixed(1)}%`}
+          hint="How much your monthly spending varies from recent history. High volatility makes budgets less predictable and deserves category-level review."
           detail="Higher volatility makes month-end planning and budget timing harder."
           tone={volatilityTone}
         />
         <SignalMetricCard
           title="Review Backlog"
           value={String(data.review_count)}
+          hint="Transactions still awaiting review. Reducing this improves category accuracy, budget math, analytics, and future AI auto-fill behavior."
           detail="Unreviewed transactions weaken categories, budgets, and AI learning quality."
           tone={data.review_count > 10 ? 'warn' : 'good'}
         />
@@ -897,11 +907,14 @@ function Section({ title, emoji, children }: { title: string; emoji: string; chi
   )
 }
 
-function ChartCard({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function ChartCard({ title, subtitle, hint, children }: { title: string; subtitle?: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return (
     <Card>
       <CardHeader className="pb-2 pt-4 px-5">
-        <CardTitle className="text-sm font-medium leading-none">{title}</CardTitle>
+        <div className="flex items-center gap-1">
+          <CardTitle className="text-sm font-medium leading-none">{title}</CardTitle>
+          {hint && <MetricHint label={`${title} explanation`}>{hint}</MetricHint>}
+        </div>
         {subtitle && <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>}
       </CardHeader>
       <CardContent className="pb-4 px-5">
@@ -1005,10 +1018,10 @@ export function Analytics() {
         {/* ── Category Analysis ── */}
         <Section title="Category Analysis" emoji="🗂️">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title="Spend by Category" subtitle={`${monthName(month)} ${year} — top 8`}>
+            <ChartCard title="Spend by Category" subtitle={`${monthName(month)} ${year} — top 8`} hint="Ranks categories by spend for the selected month. Use it to find the largest drivers before drilling into transactions.">
               <CategoryBarChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
-            <ChartCard title="Category Mix" subtitle={`${monthName(month)} ${year}`}>
+            <ChartCard title="Category Mix" subtitle={`${monthName(month)} ${year}`} hint="Shows each category as a share of total spend. A tiny slice is noise; a growing large slice is worth investigating.">
               <CategoryPieChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
@@ -1018,11 +1031,11 @@ export function Analytics() {
         <Section title="Income & Savings" emoji="💰">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
-              <ChartCard title="Savings Rate Trend" subtitle={`Last ${trendMonths} months`}>
+              <ChartCard title="Savings Rate Trend" subtitle={`Last ${trendMonths} months`} hint="Savings rate is net savings divided by income. If no income is recorded, the chart falls back to net savings dollars.">
                 <SavingsRateChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
               </ChartCard>
             </div>
-            <ChartCard title="Need / Want / Savings" subtitle={`${monthName(month)} ${year}`}>
+            <ChartCard title="Need / Want / Savings" subtitle={`${monthName(month)} ${year}`} hint="Groups spending by need, want, savings, or not-applicable tags. This helps separate essential costs from flexible choices.">
               <NWSDonut month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
@@ -1032,11 +1045,11 @@ export function Analytics() {
         <Section title="Spending Patterns" emoji="🔄">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
-              <ChartCard title="Top Merchants" subtitle={`${monthName(month)} ${year}`}>
+              <ChartCard title="Top Merchants" subtitle={`${monthName(month)} ${year}`} hint="Ranks merchants by spend. Repeated high merchants are good candidates for subscription, habit, or reimbursement review.">
                 <TopMerchantsChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
               </ChartCard>
             </div>
-            <ChartCard title="Recurring vs One-time" subtitle={`${monthName(month)} ${year}`}>
+            <ChartCard title="Recurring vs One-time" subtitle={`${monthName(month)} ${year}`} hint="Compares baseline recurring costs with one-time spending. High recurring spend means less flexibility every month.">
               <RecurringDonut month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
@@ -1045,16 +1058,16 @@ export function Analytics() {
         {/* ── Spending Behavior ── */}
         <Section title="Spending Behavior" emoji="🗓️">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title="Cashflow Pace" subtitle={`${monthName(month)} ${year} vs your trailing ${trendMonths}-month pace`}>
+            <ChartCard title="Cashflow Pace" subtitle={`${monthName(month)} ${year} vs your trailing ${trendMonths}-month pace`} hint="Compares this month’s daily spending pace to your recent average. A faster pace suggests you may finish the month above normal.">
               <CashflowPaceChart month={month} year={year} months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
-            <ChartCard title="Fixed-Cost Lock Trend" subtitle={`Recurring/fixed commitments as income pressure`}>
+            <ChartCard title="Fixed-Cost Lock Trend" subtitle={`Recurring/fixed commitments as income pressure`} hint="Tracks fixed or recurring commitments as a percentage of income over time. Rising lock can make budgets feel tighter even if income is steady.">
               <FixedCommitmentTrendChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
-            <ChartCard title="Spend by Day of Week" subtitle={`Last ${trendMonths} months — intensity shows relative spend`}>
+            <ChartCard title="Spend by Day of Week" subtitle={`Last ${trendMonths} months — intensity shows relative spend`} hint="Highlights which weekdays tend to carry more spend. Useful for spotting weekend habits, commute costs, or recurring billing days.">
               <DayOfWeekChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
-            <ChartCard title="Budget vs Actual" subtitle={`Last ${trendMonths} months — all categories combined`}>
+            <ChartCard title="Budget vs Actual" subtitle={`Last ${trendMonths} months — all categories combined`} hint="Compares total budgeted amount with actual spend. Consistent overages mean targets may be unrealistic or categories need attention.">
               <BudgetTrendChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
@@ -1063,7 +1076,7 @@ export function Analytics() {
         {/* ── Reimbursements ── */}
         <Section title="Reimbursements" emoji="💳">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title="Pipeline by Status" subtitle="All time">
+            <ChartCard title="Pipeline by Status" subtitle="All time" hint="Shows reimbursable expenses by status. Large to-submit or submitted balances are money you may need to chase.">
               <ReimbursementChart />
             </ChartCard>
           </div>

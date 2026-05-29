@@ -45,10 +45,29 @@ interface NavItem {
   badge?: number
 }
 
+function useNavItems() {
+  const { needsReviewCount, importQueueCount } = useUIStore()
+  return [
+    { icon: LayoutDashboard, label: 'Dashboard',      to: '/' },
+    { icon: ArrowLeftRight,  label: 'Transactions',   to: '/transactions', badge: needsReviewCount },
+    { icon: Upload,          label: 'Import',         to: '/import',       badge: importQueueCount },
+    { icon: BarChart3,       label: 'Analytics',      to: '/analytics' },
+    { icon: Target,          label: 'Budget',         to: '/budget' },
+    { icon: Receipt,         label: 'Reimbursements', to: '/reimbursements' },
+    { icon: RefreshCw,       label: 'Subscriptions',  to: '/subscriptions' },
+    { icon: Plane,           label: 'Trips',          to: '/trips' },
+    { icon: MessageSquare,   label: 'Ask AI',         to: '/ask-ai' },
+    { icon: BrainCircuit,    label: 'Finance Advisor', to: '/advisor' },
+    { icon: Cpu,             label: 'App Insights',   to: '/app-insights' },
+    { icon: Settings,        label: 'Settings',       to: '/settings' },
+  ] satisfies NavItem[]
+}
+
 export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar, theme, toggleTheme, needsReviewCount, importQueueCount, setBadgeCounts } = useUIStore()
+  const { sidebarCollapsed, toggleSidebar, theme, toggleTheme, setBadgeCounts } = useUIStore()
   const { logout } = useAuthStore()
   const location = useLocation()
+  const navItems = useNavItems()
 
   // Fetch on mount and on a polling interval
   useEffect(() => {
@@ -63,27 +82,12 @@ export function Sidebar() {
     fetchBadgeCounts(setBadgeCounts)
   }, [location.pathname])
 
-  const navItems: NavItem[] = [
-    { icon: LayoutDashboard, label: 'Dashboard',      to: '/' },
-    { icon: ArrowLeftRight,  label: 'Transactions',   to: '/transactions', badge: needsReviewCount },
-    { icon: Upload,          label: 'Import',         to: '/import',       badge: importQueueCount },
-    { icon: BarChart3,       label: 'Analytics',      to: '/analytics' },
-    { icon: Target,          label: 'Budget',         to: '/budget' },
-    { icon: Receipt,         label: 'Reimbursements', to: '/reimbursements' },
-    { icon: RefreshCw,       label: 'Subscriptions',  to: '/subscriptions' },
-    { icon: Plane,           label: 'Trips',          to: '/trips' },
-    { icon: MessageSquare,   label: 'Ask AI',         to: '/ask-ai' },
-    { icon: BrainCircuit,    label: 'Finance Advisor', to: '/advisor' },
-    { icon: Cpu,             label: 'App Insights',   to: '/app-insights' },
-    { icon: Settings,        label: 'Settings',       to: '/settings' },
-  ]
-
   return (
     <TooltipProvider delayDuration={0}>
       <motion.aside
         animate={{ width: sidebarCollapsed ? 64 : 240 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="fixed left-0 top-0 h-screen flex flex-col border-r bg-card z-40 overflow-hidden"
+        className="fixed left-0 top-0 z-40 hidden h-screen flex-col overflow-hidden border-r bg-card md:flex"
       >
         {/* Header */}
         <div className={cn('flex items-center h-16 px-3 border-b', sidebarCollapsed ? 'justify-center' : 'justify-between px-4')}>
@@ -109,6 +113,7 @@ export function Sidebar() {
           </AnimatePresence>
           <button
             onClick={toggleSidebar}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className={cn(
               'p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors flex-shrink-0',
               sidebarCollapsed && 'mx-auto'
@@ -186,6 +191,7 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <button
                 onClick={toggleTheme}
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
                 className={cn(
                   'flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors w-full',
                   sidebarCollapsed && 'justify-center px-2'
@@ -208,6 +214,7 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <button
                 onClick={logout}
+                aria-label="Lock app"
                 className={cn(
                   'flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors w-full',
                   sidebarCollapsed && 'justify-center px-2'
@@ -228,5 +235,44 @@ export function Sidebar() {
         </div>
       </motion.aside>
     </TooltipProvider>
+  )
+}
+
+export function MobileNav() {
+  const location = useLocation()
+  const navItems = useNavItems()
+
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-50 border-t bg-card/95 backdrop-blur md:hidden">
+      <div className="flex h-16 items-center gap-1 overflow-x-auto px-2 pb-[env(safe-area-inset-bottom)]">
+        {navItems.map(({ icon: Icon, label, to, badge }) => {
+          const isActive = to === '/'
+            ? location.pathname === '/'
+            : location.pathname.startsWith(to)
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              className={cn(
+                'relative flex h-12 min-w-[68px] flex-col items-center justify-center gap-1 rounded-lg px-2 text-[10px] font-medium transition-colors',
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+              )}
+            >
+              <span className="relative">
+                <Icon className="h-4 w-4" />
+                {badge != null && badge > 0 && (
+                  <span className="absolute -right-2 -top-2 min-w-[16px] rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-4 text-white">
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                )}
+              </span>
+              <span className="max-w-[60px] truncate">{label}</span>
+            </NavLink>
+          )
+        })}
+      </div>
+    </nav>
   )
 }

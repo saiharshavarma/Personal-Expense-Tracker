@@ -835,7 +835,7 @@ export function Trips() {
       </div>
 
       {/* Status filter tabs */}
-      <div className="flex gap-1 mb-4 p-1 bg-muted rounded-lg w-fit">
+      <div className="flex flex-wrap gap-1 mb-4 p-1 bg-muted rounded-lg sm:w-fit">
         {STATUS_TABS.map(({ id, label }) => (
           <button
             key={id}

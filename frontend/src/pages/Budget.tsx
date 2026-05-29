@@ -4,6 +4,7 @@ import {
   Loader2, Copy, TrendingUp, TrendingDown, Minus, LayoutGrid,
 } from 'lucide-react'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
+import { MetricHint } from '@/components/MetricHint'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -459,11 +460,14 @@ export function Budget() {
 
       {/* Income banner */}
       {income > 0 ? (
-        <div className="flex items-center justify-between rounded-lg bg-muted/60 border px-4 py-2.5 mb-4 text-sm">
-          <span className="text-muted-foreground">
-            {nws.income_source === 'income_category'
-              ? 'Income this month (from Income-tagged transactions)'
-              : 'Income this month (all non-transfer credits — tag transactions as "Income" for precision)'}
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/60 border px-4 py-2.5 mb-4 text-sm">
+          <span className="flex items-center gap-1 text-muted-foreground">
+            <span>
+              {nws.income_source === 'income_category'
+                ? 'Income this month (from Income-tagged transactions)'
+                : 'Income this month (all non-transfer credits — tag transactions as "Income" for precision)'}
+            </span>
+            <MetricHint label="Budget income explanation">This is the income base used to calculate Needs, Wants, and Savings dollar targets. Tag paychecks as Income for the most precise targets.</MetricHint>
           </span>
           <span className="font-semibold tabular-nums">{fmt(income)}</span>
         </div>
@@ -490,15 +494,24 @@ export function Budget() {
             <Card key={key}>
               <CardContent className="pt-4 pb-4">
                 {/* Header */}
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-sm font-medium">{label}</span>
+                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1">
+                  <span className="flex items-center gap-1 text-sm font-medium">
+                    {label}
+                    <MetricHint label={`${label} budget bucket explanation`}>
+                      {label === 'Needs'
+                        ? 'Essential spending such as housing, utilities, groceries, healthcare, and transportation. If this exceeds target, fixed costs may be too high for current income.'
+                        : label === 'Wants'
+                        ? 'Flexible lifestyle spending such as dining, shopping, entertainment, and travel. This is usually the easiest bucket to adjust.'
+                        : 'Savings or investment-oriented spending. Being under target can mean you are not saving as much as planned; being over target is usually healthy unless cashflow is tight.'}
+                    </MetricHint>
+                  </span>
                   <span className="text-xs font-medium text-muted-foreground">
                     {target_pct}% of income
                   </span>
                 </div>
 
                 {/* Target dollar amount */}
-                <div className="flex justify-between items-baseline mb-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
                   <span className="text-lg font-bold tabular-nums">{fmt(spent)}</span>
                   {income > 0 && (
                     <span className="text-xs text-muted-foreground">
@@ -561,17 +574,20 @@ export function Budget() {
       {!loading && rows.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
           {[
-            { label: 'Total Budget', value: totals.budget, color: '' },
-            { label: 'Gross Spend', value: totals.gross_spend, color: '' },
-            { label: 'Reimbursed', value: totals.reimbursed, color: 'text-muted-foreground' },
+            { label: 'Total Budget', value: totals.budget, color: '', hint: 'The sum of all category budget targets for the selected month.' },
+            { label: 'Gross Spend', value: totals.gross_spend, color: '', hint: 'All debit spending before subtracting received reimbursements.' },
+            { label: 'Reimbursed', value: totals.reimbursed, color: 'text-muted-foreground', hint: 'Money already received back for reimbursable expenses. Pending reimbursements are not counted here yet.' },
             { label: 'Net Personal', value: totals.net_personal,
-              color: totals.net_personal > totals.budget ? 'text-destructive' : '' },
+              color: totals.net_personal > totals.budget ? 'text-destructive' : '', hint: 'Gross spend minus received reimbursements. This is the budget comparison number for your real out-of-pocket cost.' },
             { label: 'Budget Remaining', value: totals.remaining,
-              color: totals.remaining >= 0 ? 'text-green-600 dark:text-green-400' : 'text-destructive' },
-          ].map(({ label, value, color }) => (
+              color: totals.remaining >= 0 ? 'text-green-600 dark:text-green-400' : 'text-destructive', hint: 'Total budget minus net personal spend. Positive means room remains; negative means you are over budget.' },
+          ].map(({ label, value, color, hint }) => (
             <Card key={label}>
               <CardContent className="pt-3 pb-3 px-4">
-                <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+                <div className="mb-0.5 flex items-center gap-1">
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <MetricHint label={`${label} explanation`}>{hint}</MetricHint>
+                </div>
                 <p className={`text-base font-semibold tabular-nums ${color}`}>{fmt(value)}</p>
               </CardContent>
             </Card>
@@ -582,7 +598,10 @@ export function Budget() {
       {/* Category table */}
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Category Budgets</CardTitle>
+          <div className="flex items-center gap-1">
+            <CardTitle className="text-base">Category Budgets</CardTitle>
+            <MetricHint label="Category Budgets explanation">Each row compares a category target with actual spending for the month. Watch rows near or over 100%, then inspect transactions for surprises or miscategorization.</MetricHint>
+          </div>
           {!loading && rows.length > 0 && (
             <p className="text-xs text-muted-foreground">{rows.length} categories</p>
           )}

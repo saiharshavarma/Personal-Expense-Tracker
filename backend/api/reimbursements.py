@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +21,10 @@ class BatchCreate(BaseModel):
     expense_tool: Optional[str] = None
     submission_method: Optional[str] = None
     notes: Optional[str] = None
-    transaction_ids: List[uuid.UUID] = Field(default_factory=list)
+    transaction_ids: List[uuid.UUID] = Field(default_factory=list, max_length=500)
+
+
+_VALID_BATCH_STATUSES = {"draft", "submitted", "approved", "paid", "partial", "rejected"}
 
 
 class BatchUpdate(BaseModel):
@@ -29,9 +32,16 @@ class BatchUpdate(BaseModel):
     status: Optional[str] = None
     submitted_date: Optional[date] = None
     expected_payment_date: Optional[date] = None
-    total_received: Optional[Decimal] = None
+    total_received: Optional[Decimal] = Field(None, ge=0)
     submission_reference: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in _VALID_BATCH_STATUSES:
+            raise ValueError(f"Invalid status. Must be one of: {sorted(_VALID_BATCH_STATUSES)}")
+        return v
 
 
 def _serialize_batch(b: ReimbursementBatch) -> dict:
@@ -43,7 +53,7 @@ def _serialize_batch(b: ReimbursementBatch) -> dict:
         "expected_payment_date": b.expected_payment_date.isoformat() if b.expected_payment_date else None,
         # L-6: Use `is not None` so a total_submitted of 0.0 is returned as 0.0, not None
         "total_submitted": float(b.total_submitted) if b.total_submitted is not None else None,
-        "total_received": float(b.total_received) if b.total_received else 0,
+        "total_received": float(b.total_received) if b.total_received is not None else 0,
         "status": b.status,
         "expense_tool": b.expense_tool,
         "submission_reference": b.submission_reference,
@@ -77,7 +87,7 @@ async def get_pipeline(
                 "date": t.date.isoformat(),
                 "merchant": t.merchant or t.description,
                 "amount": float(t.amount),
-                "expected_reimbursement": float(t.expected_reimbursement) if t.expected_reimbursement else float(t.amount),
+                "expected_reimbursement": float(t.expected_reimbursement) if t.expected_reimbursement is not None else float(t.amount),
                 "reimbursement_source": t.reimbursement_source,
                 "category": t.category,
                 "days_outstanding": (today - t.date).days if t.date else 0,
@@ -115,7 +125,7 @@ async def create_batch(
             )
         )
         txns_to_tag = result.scalars().all()
-        total = sum(t.expected_reimbursement or t.amount for t in txns_to_tag)
+        total = sum(t.expected_reimbursement if t.expected_reimbursement is not None else t.amount for t in txns_to_tag)
 
     # C-5: Set status="submitted" when transactions are immediately tagged — the
     # batch is no longer a draft once it has transactions attached to it.
@@ -180,7 +190,7 @@ async def update_reimbursement_status(
     # H-9: Only set received_reimbursement if it hasn't been recorded yet.
     # If the user already captured a partial or full received amount, preserve it —
     # they may have entered the real received value rather than the expected amount.
-    if status == "paid" and not t.received_reimbursement:
-        t.received_reimbursement = t.expected_reimbursement or t.amount
+    if status == "paid" and t.received_reimbursement is None:
+        t.received_reimbursement = t.expected_reimbursement if t.expected_reimbursement is not None else t.amount
     await db.commit()
     return {"id": str(t.id), "reimbursement_status": status}

@@ -12,7 +12,7 @@ from typing import Optional
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
@@ -117,7 +117,7 @@ async def export_csv(
     category: Optional[str] = None,
     direction: Optional[str] = None,
     account_id: Optional[str] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=200),
     is_recurring: Optional[bool] = None,
     need_want_savings: Optional[str] = None,
     _user=Depends(get_current_user),
@@ -227,7 +227,7 @@ async def export_excel(
     category: Optional[str] = None,
     direction: Optional[str] = None,
     account_id: Optional[str] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=200),
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +13,11 @@ from db.models import UserPreferences
 router = APIRouter(tags=["preferences"])
 
 _VALID_AI_PROVIDERS = {"anthropic", "openai"}
+_VALID_THEMES = {"light", "dark", "system"}
+_VALID_CURRENCIES = {
+    "USD", "EUR", "GBP", "INR", "CAD", "AUD", "JPY", "CHF", "CNY", "SGD",
+    "HKD", "NZD", "SEK", "NOK", "DKK", "MXN", "BRL", "ZAR", "KRW",
+}
 
 
 class PreferencesUpdate(BaseModel):
@@ -29,6 +34,19 @@ class PreferencesUpdate(BaseModel):
     dashboard_layout: Optional[dict] = None
     default_budget_rule: Optional[dict] = None
     currency: Optional[str] = None
+
+
+def _mask_dashboard_layout(layout: Optional[dict]) -> Optional[dict]:
+    """Mask smtp_password in email_reports config before returning to client."""
+    if not layout:
+        return layout
+    result = dict(layout)
+    if "email_reports" in result and isinstance(result["email_reports"], dict):
+        er = dict(result["email_reports"])
+        if er.get("smtp_password"):
+            er["smtp_password"] = "••••••••"
+        result["email_reports"] = er
+    return result
 
 
 def _prefs_to_dict(prefs: UserPreferences) -> dict:
@@ -50,7 +68,7 @@ def _prefs_to_dict(prefs: UserPreferences) -> dict:
         "expense_tool_name": prefs.expense_tool_name,
         "backup_path": prefs.backup_path,
         "backup_to_icloud": prefs.backup_to_icloud,
-        "dashboard_layout": prefs.dashboard_layout,
+        "dashboard_layout": _mask_dashboard_layout(prefs.dashboard_layout),
         "default_budget_rule": prefs.default_budget_rule,
         "onboarding_complete": prefs.onboarding_complete,
         "webauthn_enrolled": prefs.webauthn_credential is not None,
@@ -86,8 +104,30 @@ async def update_preferences(
             status_code=400,
             detail=f"Invalid ai_provider '{body.ai_provider}'. Must be one of: {sorted(_VALID_AI_PROVIDERS)}",
         )
+    if body.theme and body.theme not in _VALID_THEMES:
+        raise HTTPException(status_code=400, detail=f"Invalid theme. Must be one of: {sorted(_VALID_THEMES)}")
+    if body.currency and body.currency not in _VALID_CURRENCIES:
+        raise HTTPException(status_code=400, detail=f"Unsupported currency '{body.currency}'.")
 
     update_data = body.model_dump(exclude_none=True)
+
+    # Merge dashboard_layout instead of replacing, and guard against writing
+    # the masked smtp_password sentinel back over the real stored value.
+    if "dashboard_layout" in update_data and isinstance(update_data["dashboard_layout"], dict):
+        merged = dict(prefs.dashboard_layout or {})
+        incoming = update_data.pop("dashboard_layout")
+        for k, v in incoming.items():
+            if k == "email_reports" and isinstance(v, dict):
+                existing_er = dict(merged.get("email_reports") or {})
+                for ek, ev in v.items():
+                    if ek == "smtp_password" and ev == "••••••••":
+                        continue  # sentinel — keep the stored password untouched
+                    existing_er[ek] = ev
+                merged["email_reports"] = existing_er
+            else:
+                merged[k] = v
+        prefs.dashboard_layout = merged
+
     for field, value in update_data.items():
         if hasattr(prefs, field):
             setattr(prefs, field, value)

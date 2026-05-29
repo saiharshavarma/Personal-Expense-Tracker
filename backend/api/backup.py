@@ -8,6 +8,7 @@ import io
 import json
 import gzip
 import logging
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
@@ -22,6 +23,7 @@ from db.database import get_db
 from db.models import (
     BackupLog, Transaction, Account, Budget, Subscription,
     Trip, UserPreferences, ReimbursementBatch, MerchantRule,
+    ImportBatch, IncomeSchedule,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,8 @@ router = APIRouter(tags=["backup"])
 
 
 def _serial(v):
+    if isinstance(v, uuid.UUID):
+        return str(v)
     if isinstance(v, Decimal):
         return float(v)
     if isinstance(v, (date, datetime)):
@@ -37,11 +41,33 @@ def _serial(v):
     return v
 
 
+_PREFS_REDACT = {"password_hash", "webauthn_credential", "anthropic_api_key", "openai_api_key"}
+
+
+def _redact_email_smtp(layout: Optional[dict]) -> Optional[dict]:
+    """Return dashboard_layout with smtp_password stripped from the email_reports block."""
+    if not layout:
+        return layout
+    result = dict(layout)
+    if "email_reports" in result and isinstance(result["email_reports"], dict):
+        er = dict(result["email_reports"])
+        er.pop("smtp_password", None)
+        result["email_reports"] = er
+    return result
+
+
 async def _build_snapshot(db: AsyncSession) -> dict:
     """Build a full JSON-serializable snapshot of all financial data."""
     def ser(obj):
         return {k: _serial(v) for k, v in obj.__dict__.items()
-                if not k.startswith("_")}
+                if not k.startswith("_") and k not in {"net_personal_cost"}}
+
+    def ser_prefs(obj):
+        row = {k: _serial(v) for k, v in obj.__dict__.items()
+               if not k.startswith("_") and k not in _PREFS_REDACT}
+        if "dashboard_layout" in row:
+            row["dashboard_layout"] = _redact_email_smtp(row["dashboard_layout"])
+        return row
 
     txs      = (await db.execute(select(Transaction).order_by(Transaction.date.desc()))).scalars().all()
     acts     = (await db.execute(select(Account))).scalars().all()
@@ -50,17 +76,23 @@ async def _build_snapshot(db: AsyncSession) -> dict:
     trips    = (await db.execute(select(Trip))).scalars().all()
     batches  = (await db.execute(select(ReimbursementBatch))).scalars().all()
     rules    = (await db.execute(select(MerchantRule))).scalars().all()
+    imports  = (await db.execute(select(ImportBatch))).scalars().all()
+    income   = (await db.execute(select(IncomeSchedule))).scalars().all()
+    prefs    = (await db.execute(select(UserPreferences))).scalars().all()
 
     return {
         "backup_version": "1.1",
         "created_at": datetime.utcnow().isoformat(),
         "accounts":               [ser(a) for a in acts],
         "transactions":           [ser(t) for t in txs],
+        "import_batches":         [ser(b) for b in imports],
         "budgets":                [ser(b) for b in bgts],
+        "income_schedules":       [ser(s) for s in income],
         "subscriptions":          [ser(s) for s in subs],
         "trips":                  [ser(t) for t in trips],
         "reimbursement_batches":  [ser(b) for b in batches],
         "merchant_rules":         [ser(r) for r in rules],
+        "user_preferences":       [ser_prefs(p) for p in prefs],
     }
 
 

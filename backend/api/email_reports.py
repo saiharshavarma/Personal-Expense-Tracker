@@ -11,7 +11,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,14 +26,14 @@ router = APIRouter(tags=["email_reports"])
 
 class EmailSettings(BaseModel):
     enabled: bool = False
-    report_email: str = ""
-    report_day: int = 1          # 1–28
+    report_email: str = Field("", max_length=320)
+    report_day: int = Field(1, ge=1, le=28)
     reminder_enabled: bool = False
-    reminder_day: int = 28       # 1–28
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: Optional[str] = None   # None = leave unchanged
+    reminder_day: int = Field(28, ge=1, le=28)
+    smtp_host: str = Field("", max_length=255)
+    smtp_port: int = Field(587, ge=1, le=65535)
+    smtp_user: str = Field("", max_length=320)
+    smtp_password: Optional[str] = Field(None, max_length=500)  # None = leave unchanged
     use_tls: bool = True
 
 

@@ -416,7 +416,7 @@ export function Subscriptions() {
       />
 
       {/* Cost summary */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 gap-3 mb-6 sm:grid-cols-2 xl:grid-cols-4 xl:gap-4">
         {SUMMARY_CARDS.map(({ label, value, sub, icon: Icon }, i) => (
           <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
             <Card>

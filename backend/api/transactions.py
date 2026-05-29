@@ -17,7 +17,7 @@ router = APIRouter(tags=["transactions"])
 
 class TransactionCreate(BaseModel):
     date: _Date
-    amount: Decimal
+    amount: Decimal = Field(..., gt=0)
     direction: str
     description: Optional[str] = None
     account_id: Optional[uuid.UUID] = None
@@ -42,7 +42,7 @@ class TransactionCreate(BaseModel):
 
 class TransactionUpdate(BaseModel):
     date: Optional[_Date] = None
-    amount: Optional[Decimal] = None
+    amount: Optional[Decimal] = Field(None, gt=0)
     direction: Optional[str] = None
     description: Optional[str] = None
     account_id: Optional[uuid.UUID] = None
@@ -68,7 +68,7 @@ class TransactionUpdate(BaseModel):
 
 
 class BulkActionRequest(BaseModel):
-    transaction_ids: List[uuid.UUID]
+    transaction_ids: List[uuid.UUID] = Field(..., max_length=500)
     action: str  # "categorize", "mark_reimbursable", "delete", "tag"
     payload: dict = Field(default_factory=dict)
 
@@ -182,7 +182,7 @@ async def list_transactions(
     source: Optional[str] = None,
     min_amount: Optional[Decimal] = None,
     max_amount: Optional[Decimal] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=200),
     sort_by: str = "date",
     sort_dir: str = "desc",
     _user=Depends(get_current_user),

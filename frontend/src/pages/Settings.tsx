@@ -2113,15 +2113,15 @@ export function Settings() {
         }
       />
 
-      <div className="flex gap-6">
+      <div className="flex flex-col gap-6 md:flex-row">
         {/* Sidebar */}
-        <div className="w-52 flex-shrink-0">
-          <nav className="space-y-1">
+        <div className="min-w-0 md:w-52 md:flex-shrink-0">
+          <nav className="flex gap-1 overflow-x-auto pb-1 md:block md:space-y-1 md:overflow-visible md:pb-0">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-left ${
+                className={`flex flex-shrink-0 items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors md:w-full md:gap-3 ${
                   activeTab === id
                     ? 'bg-primary/10 text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-accent'
@@ -2129,7 +2129,7 @@ export function Settings() {
               >
                 <Icon className="w-4 h-4 flex-shrink-0" />
                 {label}
-                {activeTab === id && <ChevronRight className="w-3 h-3 ml-auto" />}
+                {activeTab === id && <ChevronRight className="ml-auto hidden w-3 h-3 md:block" />}
               </button>
             ))}
           </nav>

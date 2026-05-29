@@ -66,9 +66,10 @@ def _amount_expr(exclude_reimbursable: bool):
 def _income_filter():
     """
     C-7: Single canonical income filter applied consistently across analytics and
-    budgets endpoints.  Excludes Transfer and Financial category credits (which
-    are inter-account movements, not real income) while keeping NULL-category
-    credits (e.g. uncategorised salary deposits).
+    budgets endpoints.  Income is limited to credits explicitly categorized as
+    Income plus uncategorized credits (e.g. raw salary deposits before review).
+    Categorized non-income credits such as refunds, transfers, and investment
+    dividends are excluded so they do not inflate savings-rate metrics.
 
     budgets.py uses the same exclusion list — aligning here prevents the Dashboard
     savings rate and the Budget page NWS summary from showing different income
@@ -76,7 +77,7 @@ def _income_filter():
     """
     return or_(
         Transaction.category.is_(None),
-        Transaction.category.notin_(["Transfer", "Financial"]),
+        Transaction.category == "Income",
     )
 
 

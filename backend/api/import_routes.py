@@ -323,10 +323,10 @@ class StagedTransaction(BaseModel):
 
 
 class CommitImportBody(BaseModel):
-    filename: str
-    institution: str
+    filename: str = Field(..., max_length=500)
+    institution: str = Field(..., max_length=100)
     account_id: Optional[str] = None
-    transactions: List[StagedTransaction]
+    transactions: List[StagedTransaction] = Field(..., max_length=5000)
 
 
 @router.post("/parse-preview")
