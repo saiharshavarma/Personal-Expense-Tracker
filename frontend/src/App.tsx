@@ -14,6 +14,7 @@ import { Trips } from '@/pages/Trips'
 import { AskAI } from '@/pages/AskAI'
 import { FinanceAdvisor } from '@/pages/FinanceAdvisor'
 import { Settings } from '@/pages/Settings'
+import { AppInsights } from '@/pages/AppInsights'
 import { CommandPalette } from '@/components/CommandPalette'
 import { Mascot } from '@/components/Mascot'
 
@@ -46,6 +47,7 @@ export function App() {
                   <Route path="/ask-ai" element={<AskAI />} />
                   <Route path="/advisor" element={<FinanceAdvisor />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route path="/app-insights" element={<AppInsights />} />
                   {/* Catch-all */}
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

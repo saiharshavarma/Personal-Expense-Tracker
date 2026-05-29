@@ -31,6 +31,9 @@ interface StagingTransaction {
   need_want_savings: string | null
   fixed_variable: string | null
   is_reimbursable: boolean
+  /** Others' share — set on partial splits/reimbursements (friends, company, etc.).
+   *  null = whole amount is reimbursable; >0 = others owe this much back. */
+  expected_reimbursement: number | null
   is_recurring: boolean
   tags: string[]
   // User-editable fields (initialised from AI suggestions)
@@ -98,6 +101,264 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>
 }
 
+// ── Split-mode type + date helper ────────────────────────────────────────────
+
+type SplitMode = 'full' | 'shares' | 'custom'
+
+function fmtDateShort(iso: string) {
+  try {
+    const [y, m, d] = iso.split('-').map(Number)
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  } catch { return iso }
+}
+
+// ── EditPanel ─────────────────────────────────────────────────────────────────
+
+interface EditPanelProps {
+  txn: StagingTransaction
+  splitMode: SplitMode
+  setSplitMode: (m: SplitMode) => void
+  totalShares: number
+  setTotalShares: (n: number) => void
+  onUpdate: (tempId: string, changes: Partial<StagingTransaction>) => void
+}
+
+function EditPanel({ txn, splitMode, setSplitMode, totalShares, setTotalShares, onUpdate }: EditPanelProps) {
+  const othersShare: number | null =
+    splitMode === 'full'   ? null
+    : splitMode === 'shares' ? Math.round((totalShares - 1) / totalShares * txn.amount * 100) / 100
+    : txn.expected_reimbursement
+
+  const yourNetCost =
+    !txn.is_reimbursable          ? txn.amount
+    : splitMode === 'full'        ? 0
+    : othersShare !== null        ? txn.amount - othersShare
+    : txn.amount
+
+  return (
+    <div className="p-4 space-y-4 text-sm">
+      {/* Transaction header */}
+      <div className="border-b pb-3 space-y-0.5">
+        <p className="font-semibold leading-snug">{txn.description}</p>
+        {txn.merchant && txn.merchant !== txn.description && (
+          <p className="text-xs text-muted-foreground">{txn.merchant}</p>
+        )}
+        <p className="text-xs text-muted-foreground">{txn.date}</p>
+      </div>
+
+      {/* Direction + Amount */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => onUpdate(txn.temp_id, {
+            direction: txn.direction === 'debit' ? 'credit' : 'debit',
+          })}
+          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+            txn.direction === 'debit'
+              ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
+              : 'bg-green-500/10 text-green-600 hover:bg-green-500/20'
+          }`}
+          title="Click to flip direction"
+        >
+          <ArrowLeftRight className="w-3 h-3" />
+          {txn.direction}
+        </button>
+        <span className={`text-xl font-bold tabular-nums ${txn.direction === 'credit' ? 'text-green-500' : ''}`}>
+          {fmtAmount(txn.amount, txn.direction)}
+        </span>
+      </div>
+
+      {/* AI info */}
+      {(txn.ai_confidence !== null || txn.ai_flags.length > 0) && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md px-2.5 py-1.5">
+          <span>AI:</span>
+          {txn.ai_confidence !== null && (
+            <span className={`font-medium ${confColor(txn.ai_confidence)}`}>
+              {Math.round(txn.ai_confidence * 100)}% confident
+            </span>
+          )}
+          {txn.ai_flags.map(f => (
+            <span key={f} className="text-amber-500 truncate" title={f}>⚠ {f}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Category */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Category</label>
+        <select
+          value={txn.category ?? ''}
+          onChange={e => onUpdate(txn.temp_id, { category: e.target.value || null, subcategory: null })}
+          className="w-full h-9 rounded-md border border-input bg-background px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">— Uncategorized —</option>
+          {ALL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+
+      {/* Subcategory */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subcategory</label>
+        <select
+          value={txn.subcategory ?? ''}
+          disabled={!txn.category}
+          onChange={e => onUpdate(txn.temp_id, { subcategory: e.target.value || null })}
+          className="w-full h-9 rounded-md border border-input bg-background px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <option value="">— No subcategory —</option>
+          {(txn.category ? getSubcategories(txn.category) : []).map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Reimbursable / Split — only meaningful on debits */}
+      {txn.direction === 'debit' && (
+        <div className="space-y-2">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Reimbursable / Split</label>
+          <div className={`rounded-lg border p-3 space-y-3 transition-colors ${
+            txn.is_reimbursable ? 'border-amber-400/40 bg-amber-500/5' : 'border-input'
+          }`}>
+            {/* Toggle */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id={`reimb-${txn.temp_id}`}
+                checked={txn.is_reimbursable}
+                onChange={e => {
+                  onUpdate(txn.temp_id, {
+                    is_reimbursable: e.target.checked,
+                    expected_reimbursement: null,
+                  })
+                  setSplitMode('full')
+                }}
+                className="w-4 h-4 accent-amber-500"
+              />
+              <label htmlFor={`reimb-${txn.temp_id}`} className="text-sm font-medium cursor-pointer">
+                Will be reimbursed
+              </label>
+            </div>
+
+            {txn.is_reimbursable && (
+              <div className="space-y-2.5 pl-6">
+                {/* Mode: Full reimbursement */}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`split-${txn.temp_id}`}
+                    checked={splitMode === 'full'}
+                    onChange={() => {
+                      setSplitMode('full')
+                      onUpdate(txn.temp_id, { expected_reimbursement: null })
+                    }}
+                    className="accent-amber-500"
+                  />
+                  <span className="text-sm">Full — all ${txn.amount.toFixed(2)} back</span>
+                </label>
+
+                {/* Mode: N People (equal split) */}
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`split-${txn.temp_id}`}
+                    checked={splitMode === 'shares'}
+                    onChange={() => {
+                      setSplitMode('shares')
+                      const er = Math.round((totalShares - 1) / totalShares * txn.amount * 100) / 100
+                      onUpdate(txn.temp_id, { expected_reimbursement: er })
+                    }}
+                    className="accent-amber-500 mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <span className="text-sm">Equal split among</span>
+                    {splitMode === 'shares' && (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={2}
+                          max={20}
+                          value={totalShares}
+                          onChange={e => {
+                            const n = Math.max(2, Math.min(20, parseInt(e.target.value) || 2))
+                            setTotalShares(n)
+                            const er = Math.round((n - 1) / n * txn.amount * 100) / 100
+                            onUpdate(txn.temp_id, { expected_reimbursement: er })
+                          }}
+                          className="w-14 h-7 rounded border border-amber-400/60 bg-background px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                        <span className="text-sm text-muted-foreground">people</span>
+                      </div>
+                    )}
+                    {splitMode === 'shares' && (
+                      <p className="text-xs text-muted-foreground">
+                        Each pays ${(txn.amount / totalShares).toFixed(2)} · others owe ${othersShare?.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+                </label>
+
+                {/* Mode: Custom dollar amount */}
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`split-${txn.temp_id}`}
+                    checked={splitMode === 'custom'}
+                    onChange={() => setSplitMode('custom')}
+                    className="accent-amber-500 mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <span className="text-sm">Custom — others owe exactly</span>
+                    {splitMode === 'custom' && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm text-muted-foreground">$</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={txn.amount}
+                          step={0.01}
+                          placeholder="0.00"
+                          value={txn.expected_reimbursement ?? ''}
+                          onChange={e => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value)
+                            onUpdate(txn.temp_id, { expected_reimbursement: val })
+                          }}
+                          className="w-24 h-7 rounded border border-amber-400/60 bg-background px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-amber-400 tabular-nums"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </label>
+
+                {/* Net cost summary */}
+                <div className="border-t border-amber-400/20 pt-2 flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Your net cost</span>
+                  <span className="font-semibold text-amber-600">${yourNetCost.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Skip / Include */}
+      <div className="flex items-center justify-between pt-1 border-t">
+        <span className="text-xs text-muted-foreground">
+          {txn.skip ? 'Excluded from import' : 'Will be imported'}
+        </span>
+        <button
+          onClick={() => onUpdate(txn.temp_id, { skip: !txn.skip })}
+          className={`h-7 px-3 rounded-md text-xs font-medium transition-colors ${
+            txn.skip
+              ? 'bg-primary/10 text-primary hover:bg-primary/20'
+              : 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+          }`}
+        >
+          {txn.skip ? <><RefreshCw className="w-3 h-3 inline mr-1" />Include</> : <><X className="w-3 h-3 inline mr-1" />Skip</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Staging Review ────────────────────────────────────────────────────────────
 
 interface StagingReviewProps {
@@ -109,238 +370,161 @@ interface StagingReviewProps {
 }
 
 function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: StagingReviewProps) {
-  const [editingCategory, setEditingCategory] = useState<string | null>(null)
-  const [editingSubcategory, setEditingSubcategory] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(stagedTxns[0]?.temp_id ?? null)
+  const [splitMode, setSplitMode] = useState<SplitMode>('full')
+  const [totalShares, setTotalShares] = useState(2)
 
+  const selected = stagedTxns.find(t => t.temp_id === selectedId) ?? null
   const included = stagedTxns.filter(t => !t.skip)
   const skipped  = stagedTxns.filter(t => t.skip)
 
-  const flipAll = () => {
+  // Sync split mode when the selected transaction changes
+  useEffect(() => {
+    if (!selected?.is_reimbursable || selected.expected_reimbursement === null) {
+      setSplitMode('full')
+      return
+    }
+    const er = selected.expected_reimbursement
+    const amt = selected.amount
+    // Detect if it was set via an N-shares calculation: er = (n-1)/n * amt
+    const n = Math.round(amt / (amt - er))
+    if (n >= 2 && n <= 20 && Math.abs((n - 1) / n * amt - er) < 0.02) {
+      setSplitMode('shares')
+      setTotalShares(n)
+    } else {
+      setSplitMode('custom')
+    }
+  }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const flipAll = () =>
     stagedTxns.forEach(t => {
       if (!t.skip) onUpdate(t.temp_id, { direction: t.direction === 'debit' ? 'credit' : 'debit' })
     })
-  }
-
-  const skipAll = () => stagedTxns.forEach(t => onUpdate(t.temp_id, { skip: true }))
+  const skipAll    = () => stagedTxns.forEach(t => onUpdate(t.temp_id, { skip: true }))
   const includeAll = () => stagedTxns.forEach(t => onUpdate(t.temp_id, { skip: false }))
 
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 flex-wrap text-xs">
-        <span className="font-medium text-muted-foreground">
-          {included.length} to import{skipped.length > 0 ? `, ${skipped.length} skipped` : ''}
-        </span>
+      <div className="flex items-center gap-2 flex-wrap">
+        <div>
+          <span className="text-sm font-semibold">{included.length}</span>
+          <span className="text-sm text-muted-foreground"> to import</span>
+          {skipped.length > 0 && (
+            <span className="text-sm text-muted-foreground">, {skipped.length} skipped</span>
+          )}
+        </div>
         <div className="flex-1" />
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs gap-1.5"
-          onClick={flipAll}
-          title="Flip all debit ↔ credit (useful when the whole statement was parsed with the wrong sign)"
-        >
-          <ArrowLeftRight className="w-3 h-3" />
-          Flip All Directions
+        <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={flipAll}
+          title="Flip all debit ↔ credit (useful when the whole statement parsed with the wrong sign)">
+          <ArrowLeftRight className="w-3.5 h-3.5" /> Flip All Directions
         </Button>
         {skipped.length > 0
-          ? <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={includeAll}>
-              <RefreshCw className="w-3 h-3" /> Include All
+          ? <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={includeAll}>
+              <RefreshCw className="w-3.5 h-3.5" /> Include All
             </Button>
-          : <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 text-muted-foreground" onClick={skipAll}>
-              <SkipForward className="w-3 h-3" /> Skip All
+          : <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-muted-foreground" onClick={skipAll}>
+              <SkipForward className="w-3.5 h-3.5" /> Skip All
             </Button>
         }
       </div>
 
-      {/* Table */}
-      <div className="rounded-md border overflow-hidden">
-        <div className="overflow-x-auto">
-          <div className="max-h-[420px] overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-muted/95 backdrop-blur-sm z-10">
-                <tr className="border-b">
-                  <th className="text-left px-2 py-2 font-medium w-8"></th>
-                  <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Date</th>
-                  <th className="text-left px-2 py-2 font-medium">Description</th>
-                  <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Direction</th>
-                  <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Amount</th>
-                  <th className="text-left px-2 py-2 font-medium">Category</th>
-                  <th className="text-left px-2 py-2 font-medium">Subcategory</th>
-                  <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Reimb.</th>
-                  <th className="text-center px-2 py-2 font-medium w-6"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {stagedTxns.map((txn) => {
-                  const dimmed = txn.skip
-                  return (
-                    <tr
-                      key={txn.temp_id}
-                      className={`border-b last:border-0 transition-colors ${
-                        dimmed ? 'opacity-35 bg-muted/20' : 'hover:bg-muted/30'
-                      }`}
-                    >
-                      {/* Row number */}
-                      <td className="px-2 py-1.5 text-muted-foreground/40 text-center tabular-nums">
-                        {parseInt(txn.temp_id) + 1}
-                      </td>
+      {/* Two-panel layout: list + edit panel */}
+      <div className="flex rounded-lg border overflow-hidden" style={{ height: 540 }}>
 
-                      {/* Date */}
-                      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
-                        {txn.date}
-                      </td>
+        {/* LEFT — scrollable transaction list */}
+        <div className="flex-1 overflow-y-auto min-w-0 divide-y">
+          {stagedTxns.map((txn, idx) => {
+            const isSelected = txn.temp_id === selectedId
+            const hasNet = txn.is_reimbursable && txn.expected_reimbursement !== null
+            return (
+              <div
+                key={txn.temp_id}
+                onClick={() => setSelectedId(txn.temp_id)}
+                className={`flex items-center gap-2.5 px-3 py-2.5 cursor-pointer transition-colors ${
+                  isSelected
+                    ? 'bg-primary/10 border-l-2 border-primary'
+                    : 'hover:bg-muted/40 border-l-2 border-transparent'
+                } ${txn.skip ? 'opacity-40' : ''}`}
+              >
+                {/* Index */}
+                <span className="text-xs text-muted-foreground/40 w-5 shrink-0 tabular-nums text-right">
+                  {idx + 1}
+                </span>
 
-                      {/* Description */}
-                      <td className="px-2 py-1.5 max-w-[200px]">
-                        <span className="truncate block" title={txn.description}>
-                          {txn.description}
-                        </span>
-                        {txn.merchant && txn.merchant !== txn.description && (
-                          <span className="text-muted-foreground/60 truncate block">{txn.merchant}</span>
-                        )}
-                      </td>
+                {/* Date */}
+                <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0 w-12">
+                  {fmtDateShort(txn.date)}
+                </span>
 
-                      {/* Direction toggle */}
-                      <td className="px-2 py-1.5 text-center">
-                        <button
-                          disabled={dimmed}
-                          onClick={() => onUpdate(txn.temp_id, {
-                            direction: txn.direction === 'debit' ? 'credit' : 'debit'
-                          })}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
-                            txn.direction === 'debit'
-                              ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                              : 'bg-green-500/10 text-green-600 hover:bg-green-500/20'
-                          } disabled:pointer-events-none`}
-                          title="Click to flip direction"
-                        >
-                          <ArrowLeftRight className="w-2.5 h-2.5" />
-                          {txn.direction}
-                        </button>
-                      </td>
+                {/* Description + merchant */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm truncate leading-tight">{txn.description}</p>
+                  {txn.merchant && txn.merchant !== txn.description && (
+                    <p className="text-xs text-muted-foreground truncate">{txn.merchant}</p>
+                  )}
+                </div>
 
-                      {/* Amount */}
-                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium whitespace-nowrap ${
-                        txn.direction === 'credit' ? 'text-green-500' : ''
-                      }`}>
-                        {fmtAmount(txn.amount, txn.direction)}
-                      </td>
+                {/* Category pill */}
+                {txn.category && (
+                  <span className="hidden md:block text-xs text-muted-foreground/70 shrink-0 max-w-[80px] truncate">
+                    {txn.category}
+                  </span>
+                )}
 
-                      {/* Category */}
-                      <td className="px-2 py-1.5 min-w-[130px]">
-                        {editingCategory === txn.temp_id ? (
-                          <select
-                            autoFocus
-                            value={txn.category ?? ''}
-                            onChange={e => {
-                              onUpdate(txn.temp_id, { category: e.target.value || null, subcategory: null })
-                              setEditingCategory(null)
-                            }}
-                            onBlur={() => setEditingCategory(null)}
-                            className="w-full h-6 rounded border border-input bg-background px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                          >
-                            <option value="">Uncategorized</option>
-                            {ALL_CATEGORIES.map(c => (
-                              <option key={c} value={c}>{c}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <button
-                            disabled={dimmed}
-                            onClick={() => setEditingCategory(txn.temp_id)}
-                            className="flex items-center gap-1 text-left group w-full disabled:pointer-events-none"
-                          >
-                            <span className={`truncate ${txn.category ? 'text-foreground' : 'text-muted-foreground/50 italic'}`}>
-                              {txn.category ?? 'Set category'}
-                            </span>
-                            {txn.ai_confidence !== null && (
-                              <span className={`flex-shrink-0 text-[10px] tabular-nums ${confColor(txn.ai_confidence)}`}>
-                                {Math.round((txn.ai_confidence) * 100)}%
-                              </span>
-                            )}
-                          </button>
-                        )}
-                      </td>
+                {/* Amount */}
+                <div className="text-right shrink-0">
+                  <p className={`text-sm font-medium tabular-nums whitespace-nowrap ${
+                    txn.direction === 'credit' ? 'text-green-500' : ''
+                  }`}>
+                    {fmtAmount(txn.amount, txn.direction)}
+                  </p>
+                  {hasNet && (
+                    <p className="text-xs text-amber-500 tabular-nums">
+                      net ${(txn.amount - txn.expected_reimbursement!).toFixed(2)}
+                    </p>
+                  )}
+                  {txn.is_reimbursable && !hasNet && (
+                    <p className="text-xs text-amber-500">reimb.</p>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
 
-                      {/* Subcategory */}
-                      <td className="px-2 py-1.5 min-w-[140px]">
-                        {editingSubcategory === txn.temp_id ? (
-                          <select
-                            autoFocus
-                            value={txn.subcategory ?? ''}
-                            disabled={!txn.category}
-                            onChange={e => {
-                              onUpdate(txn.temp_id, { subcategory: e.target.value || null })
-                              setEditingSubcategory(null)
-                            }}
-                            onBlur={() => setEditingSubcategory(null)}
-                            className="w-full h-6 rounded border border-input bg-background px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                          >
-                            <option value="">No subcategory</option>
-                            {(txn.category ? getSubcategories(txn.category) : []).map(s => (
-                              <option key={s} value={s}>{s}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <button
-                            disabled={dimmed || !txn.category}
-                            onClick={() => setEditingSubcategory(txn.temp_id)}
-                            className="flex items-center gap-1 text-left group w-full disabled:pointer-events-none"
-                            title={txn.category ? 'Click to edit subcategory' : 'Choose a category first'}
-                          >
-                            <span className={`truncate ${txn.subcategory ? 'text-foreground' : 'text-muted-foreground/50 italic'}`}>
-                              {txn.subcategory ?? (txn.category ? 'Set subcategory' : 'Pick category first')}
-                            </span>
-                          </button>
-                        )}
-                      </td>
-
-                      {/* Reimbursable */}
-                      <td className="px-2 py-1.5 text-center">
-                        <input
-                          type="checkbox"
-                          checked={txn.is_reimbursable}
-                          disabled={dimmed}
-                          onChange={e => onUpdate(txn.temp_id, { is_reimbursable: e.target.checked })}
-                          className="rounded border-input accent-amber-500 disabled:pointer-events-none"
-                          title="Mark as reimbursable"
-                        />
-                      </td>
-
-                      {/* Skip toggle */}
-                      <td className="px-2 py-1.5 text-center">
-                        <button
-                          onClick={() => onUpdate(txn.temp_id, { skip: !txn.skip })}
-                          title={txn.skip ? 'Include this transaction' : 'Skip this transaction'}
-                          className="text-muted-foreground/40 hover:text-destructive transition-colors"
-                        >
-                          {txn.skip
-                            ? <RefreshCw className="w-3 h-3" />
-                            : <X className="w-3 h-3" />
-                          }
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+        {/* RIGHT — edit panel */}
+        <div className="w-72 shrink-0 border-l overflow-y-auto bg-muted/20">
+          {selected ? (
+            <EditPanel
+              txn={selected}
+              splitMode={splitMode}
+              setSplitMode={setSplitMode}
+              totalShares={totalShares}
+              setTotalShares={setTotalShares}
+              onUpdate={onUpdate}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground p-6 text-center">
+              <Tag className="w-8 h-8 opacity-30" />
+              <p className="text-sm">Select a transaction to review and edit its details</p>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Detected institution */}
+      {/* Footer hint */}
       <p className="text-xs text-muted-foreground">
         Detected: <span className="font-medium text-foreground">{result.institution}</span>
-        {' · '}Click a direction badge to flip debit/credit · Click a category to change it
+        {' · '}AI pre-filled categories &amp; merchants — click any row to review or correct
+        {' · '}Use Reimbursable section for Splitwise-style expenses
       </p>
 
-      {/* Commit button */}
+      {/* Commit */}
       <Button
         onClick={onCommit}
         disabled={committing || included.length === 0}
         className="w-full gap-2"
-        size="sm"
       >
         {committing
           ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving to database…</>

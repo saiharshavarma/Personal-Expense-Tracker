@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.database import engine, Base
 from api import auth, accounts, transactions, budgets, reimbursements, \
-    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences, rules, email_reports, system
+    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences, rules, email_reports, system, product_analytics
 
 
 _MIGRATIONS = [
@@ -87,3 +87,4 @@ app.include_router(preferences.router, prefix="/api/preferences")
 app.include_router(rules.router, prefix="/api/rules")
 app.include_router(email_reports.router, prefix="/api/email-reports")
 app.include_router(system.router, prefix="/api/system")
+app.include_router(product_analytics.router, prefix="/api/app-insights")

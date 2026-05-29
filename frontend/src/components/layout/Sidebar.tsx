@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, ArrowLeftRight, Upload, BarChart3, Target,
   Receipt, RefreshCw, Plane, MessageSquare, BrainCircuit, Settings,
-  ChevronsLeft, ChevronsRight, Moon, Sun, LogOut, Wallet,
+  ChevronsLeft, ChevronsRight, Moon, Sun, LogOut, Wallet, Cpu,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUIStore, useAuthStore } from '@/store'
@@ -74,6 +74,7 @@ export function Sidebar() {
     { icon: Plane,           label: 'Trips',          to: '/trips' },
     { icon: MessageSquare,   label: 'Ask AI',         to: '/ask-ai' },
     { icon: BrainCircuit,    label: 'Finance Advisor', to: '/advisor' },
+    { icon: Cpu,             label: 'App Insights',   to: '/app-insights' },
     { icon: Settings,        label: 'Settings',       to: '/settings' },
   ]
 

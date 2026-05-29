@@ -3,7 +3,7 @@ from typing import Optional, List
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, and_, or_, extract
+from sqlalchemy import select, func, and_, or_, extract, case as sa_case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
@@ -15,15 +15,52 @@ router = APIRouter(tags=["analytics"])
 
 def _reimb_filters(exclude: bool) -> List:
     """
-    Return extra SQLAlchemy WHERE clauses when exclude_reimbursable=True.
-    Excludes transactions that are marked reimbursable AND have not yet been paid
-    (i.e. the money has not come back yet — once paid they count as zero-net-cost
-    because net_personal_cost handles that; for simplicity we exclude all
-    is_reimbursable rows so the toggle gives a clean "personal-only" view).
+    When exclude_reimbursable=True, keep transactions that are either:
+    - Not reimbursable at all, OR
+    - Partially split (is_reimbursable=True AND expected_reimbursement is set
+      AND expected_reimbursement < amount, i.e. the user still bears some cost).
+
+    Fully-reimbursable rows (no expected amount set, or expected >= amount) are
+    excluded so the "personal-only" view shows zero cost for those.
+    The net amount for partial splits is handled by _amount_expr().
     """
     if not exclude:
         return []
-    return [Transaction.is_reimbursable != True]
+    return [
+        or_(
+            Transaction.is_reimbursable != True,
+            and_(
+                Transaction.is_reimbursable == True,
+                Transaction.expected_reimbursement.isnot(None),
+                Transaction.expected_reimbursement < Transaction.amount,
+            ),
+        )
+    ]
+
+
+def _amount_expr(exclude_reimbursable: bool):
+    """
+    Amount expression for debit aggregations.
+
+    When exclude_reimbursable=False  →  Transaction.amount (full gross spend).
+    When exclude_reimbursable=True   →  for split transactions (is_reimbursable=True
+        AND expected_reimbursement is set) return amount - expected_reimbursement,
+        i.e. only the user's personal share.  All other rows use the full amount.
+        Fully-reimbursable rows are already removed by _reimb_filters so they
+        won't appear in any aggregation.
+    """
+    if not exclude_reimbursable:
+        return Transaction.amount
+    return sa_case(
+        (
+            and_(
+                Transaction.is_reimbursable == True,
+                Transaction.expected_reimbursement.isnot(None),
+            ),
+            Transaction.amount - Transaction.expected_reimbursement,
+        ),
+        else_=Transaction.amount,
+    )
 
 
 def _income_filter():
@@ -75,7 +112,7 @@ async def spend_trends(
         select(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         )
         .where(Transaction.direction == "debit", Transaction.date >= cutoff,
                *_reimb_filters(exclude_reimbursable))
@@ -102,20 +139,21 @@ async def category_breakdown(
         ]
     reimb = _reimb_filters(exclude_reimbursable)
 
+    amt = _amount_expr(exclude_reimbursable)
     # Categorized spend per category
     q = select(
         Transaction.category,
-        func.sum(Transaction.amount).label("total"),
+        func.sum(amt).label("total"),
         func.count(Transaction.id).label("count"),
     ).where(Transaction.direction == "debit", Transaction.category.isnot(None), *date_filters, *reimb)
-    result = await db.execute(q.group_by(Transaction.category).order_by(func.sum(Transaction.amount).desc()))
+    result = await db.execute(q.group_by(Transaction.category).order_by(func.sum(amt).desc()))
     rows = result.all()
 
     # Use ALL debit spend (including uncategorized) as the denominator so that
     # category percentages reflect true share of total spending, not just
     # categorized-only share.
     total_all = float((await db.execute(
-        select(func.sum(Transaction.amount))
+        select(func.sum(amt))
         .where(Transaction.direction == "debit", *date_filters, *reimb)
     )).scalar() or 0)
     total = total_all or sum(float(r.total or 0) for r in rows)
@@ -160,7 +198,7 @@ async def income_expenses(
         select(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         )
         .where(Transaction.date >= cutoff, Transaction.direction == "debit", *reimb)
         .group_by("year", "month")
@@ -218,7 +256,7 @@ async def projections(
     reimb = _reimb_filters(exclude_reimbursable)
 
     result = await db.execute(
-        select(Transaction.date, func.sum(Transaction.amount).label("daily_total"))
+        select(Transaction.date, func.sum(_amount_expr(exclude_reimbursable)).label("daily_total"))
         .where(
             Transaction.direction == "debit",
             extract("month", Transaction.date) == m,
@@ -282,15 +320,16 @@ async def top_merchants(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _amt = _amount_expr(exclude_reimbursable)
     q = select(
         Transaction.merchant,
-        func.sum(Transaction.amount).label("total"),
+        func.sum(_amt).label("total"),
         func.count(Transaction.id).label("visits"),
     ).where(Transaction.direction == "debit", Transaction.merchant.isnot(None),
             *_reimb_filters(exclude_reimbursable))
     if month and year:
         q = q.where(extract("month", Transaction.date) == month, extract("year", Transaction.date) == year)
-    result = await db.execute(q.group_by(Transaction.merchant).order_by(func.sum(Transaction.amount).desc()).limit(limit))
+    result = await db.execute(q.group_by(Transaction.merchant).order_by(func.sum(_amt).desc()).limit(limit))
     return [{"merchant": r.merchant, "total": float(r.total or 0), "visits": r.visits} for r in result.all()]
 
 
@@ -310,7 +349,7 @@ async def need_want_savings_split(
 
     q = select(
         Transaction.need_want_savings,
-        func.sum(Transaction.amount).label("total"),
+        func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         func.count(Transaction.id).label("count"),
     ).where(Transaction.direction == "debit", Transaction.need_want_savings.isnot(None),
             *_reimb_filters(exclude_reimbursable))
@@ -341,7 +380,7 @@ async def recurring_split(
 
     q = select(
         Transaction.is_recurring,
-        func.sum(Transaction.amount).label("total"),
+        func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         func.count(Transaction.id).label("count"),
     ).where(Transaction.direction == "debit", *_reimb_filters(exclude_reimbursable))
     if month and year:
@@ -386,8 +425,9 @@ async def dashboard_summary(
     )).first()
     income = float((income_row.total if income_row else None) or 0)
 
+    _ds_amt = _amount_expr(exclude_reimbursable)
     debit_row = (await db.execute(
-        select(func.sum(Transaction.amount).label("total"), func.count(Transaction.id).label("count"))
+        select(func.sum(_ds_amt).label("total"), func.count(Transaction.id).label("count"))
         .where(Transaction.direction == "debit",
                extract("month", Transaction.date) == m, extract("year", Transaction.date) == y,
                *reimb)
@@ -397,7 +437,7 @@ async def dashboard_summary(
 
     # Previous month expenses (same filter applied for consistent MoM comparison)
     prev_exp = float((await db.execute(
-        select(func.sum(Transaction.amount).label("t"))
+        select(func.sum(_ds_amt).label("t"))
         .where(Transaction.direction == "debit",
                extract("month", Transaction.date) == prev_m, extract("year", Transaction.date) == prev_y,
                *reimb)
@@ -408,11 +448,11 @@ async def dashboard_summary(
 
     # Top category
     top_cat_row = (await db.execute(
-        select(Transaction.category, func.sum(Transaction.amount).label("total"))
+        select(Transaction.category, func.sum(_ds_amt).label("total"))
         .where(Transaction.direction == "debit", Transaction.category.isnot(None),
                extract("month", Transaction.date) == m, extract("year", Transaction.date) == y,
                *reimb)
-        .group_by(Transaction.category).order_by(func.sum(Transaction.amount).desc()).limit(1)
+        .group_by(Transaction.category).order_by(func.sum(_ds_amt).desc()).limit(1)
     )).first()
 
     # Pending reimbursements — always shown regardless of toggle (it's informational)
@@ -425,7 +465,7 @@ async def dashboard_summary(
 
     # Recurring this month
     recurring = float((await db.execute(
-        select(func.sum(Transaction.amount).label("t"))
+        select(func.sum(_ds_amt).label("t"))
         .where(Transaction.direction == "debit", Transaction.is_recurring == True,
                extract("month", Transaction.date) == m, extract("year", Transaction.date) == y,
                *reimb)
@@ -487,7 +527,7 @@ async def health_score(
     income = float((income_row.total if income_row else None) or 0)
 
     expense_row = (await db.execute(
-        select(func.sum(Transaction.amount).label("total"))
+        select(func.sum(_amount_expr(exclude_reimbursable)).label("total"))
         .where(Transaction.direction == "debit",
                extract("month", Transaction.date) == m, extract("year", Transaction.date) == y,
                *reimb)
@@ -587,7 +627,7 @@ async def day_of_week(
     result = await db.execute(
         select(
             extract("dow", Transaction.date).label("dow"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_amount_expr(exclude_reimbursable)).label("total"),
             func.count(Transaction.id).label("count"),
         )
         .where(
@@ -642,7 +682,7 @@ async def budget_trend(
             extract("year",  Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
             Transaction.category,
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -716,9 +756,10 @@ async def spend_velocity(
 
     reimb = _reimb_filters(exclude_reimbursable)
 
+    _sv_amt = _amount_expr(exclude_reimbursable)
     # Selected-month total debit spend
     month_total = float((await db.execute(
-        select(func.sum(Transaction.amount))
+        select(func.sum(_sv_amt))
         .where(
             Transaction.direction == "debit",
             extract("month", Transaction.date) == m,
@@ -737,7 +778,7 @@ async def spend_velocity(
         select(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_sv_amt).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -821,8 +862,9 @@ async def decision_signals(
         )
     )).scalar() or 0)
 
+    _ds_sig_amt = _amount_expr(exclude_reimbursable)
     selected_expenses = float((await db.execute(
-        select(func.sum(Transaction.amount))
+        select(func.sum(_ds_sig_amt))
         .where(
             Transaction.direction == "debit",
             extract("month", Transaction.date) == m,
@@ -835,7 +877,7 @@ async def decision_signals(
         select(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_ds_sig_amt).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -863,7 +905,7 @@ async def decision_signals(
     selected_cat_rows = (await db.execute(
         select(
             Transaction.category,
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_ds_sig_amt).label("total"),
             func.count(Transaction.id).label("count"),
         )
         .where(
@@ -885,7 +927,7 @@ async def decision_signals(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
             Transaction.category,
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_ds_sig_amt).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -920,7 +962,7 @@ async def decision_signals(
     selected_merchant_rows = (await db.execute(
         select(
             Transaction.merchant,
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_ds_sig_amt).label("total"),
             func.count(Transaction.id).label("count"),
         )
         .where(
@@ -940,7 +982,7 @@ async def decision_signals(
     hist_merchant_rows = (await db.execute(
         select(
             Transaction.merchant,
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_ds_sig_amt).label("total"),
             func.count(func.distinct(func.date_trunc("month", Transaction.date))).label("active_months"),
         )
         .where(
@@ -979,7 +1021,7 @@ async def decision_signals(
     merchant_creep.sort(key=lambda x: x["delta"], reverse=True)
 
     fixed_total = float((await db.execute(
-        select(func.sum(Transaction.amount))
+        select(func.sum(_ds_sig_amt))
         .where(
             Transaction.direction == "debit",
             or_(Transaction.is_recurring == True, Transaction.fixed_variable == "fixed"),
@@ -1082,10 +1124,11 @@ async def cashflow_pace(
     days_in_month = calendar.monthrange(y, m)[1]
     reimb = _reimb_filters(exclude_reimbursable)
 
+    _cp_amt = _amount_expr(exclude_reimbursable)
     selected_rows = (await db.execute(
         select(
             extract("day", Transaction.date).label("day"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_cp_amt).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -1103,7 +1146,7 @@ async def cashflow_pace(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
             extract("day", Transaction.date).label("day"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_cp_amt).label("total"),
         )
         .where(
             Transaction.direction == "debit",
@@ -1176,7 +1219,7 @@ async def fixed_commitment_trend(
         select(
             extract("year", Transaction.date).label("year"),
             extract("month", Transaction.date).label("month"),
-            func.sum(Transaction.amount).label("total"),
+            func.sum(_amount_expr(exclude_reimbursable)).label("total"),
         )
         .where(
             Transaction.date >= start,

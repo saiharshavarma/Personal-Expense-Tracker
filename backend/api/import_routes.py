@@ -314,6 +314,10 @@ class StagedTransaction(BaseModel):
     fixed_variable: Optional[str] = None
     personal_work_shared: Optional[str] = None
     is_reimbursable: bool = False
+    # Friends' share — set when the transaction is a Splitwise-style partial split.
+    # If is_reimbursable=True and this is set, the user only bears amount - expected_reimbursement.
+    # If is_reimbursable=True and this is None, the whole amount is considered reimbursable.
+    expected_reimbursement: Optional[float] = None
     is_recurring: bool = False
     tags: List[str] = Field(default_factory=list)
 
@@ -404,6 +408,7 @@ async def parse_preview(
             "fixed_variable": ai.fixed_variable if ai else None,
             "personal_work_shared": ai.personal_work_shared if ai else None,
             "is_reimbursable": bool(ai.is_reimbursable) if ai else False,
+            "expected_reimbursement": None,
             "is_recurring": bool(ai.is_recurring) if ai else False,
             "tags": ai.suggested_tags if ai else [],
             # Editable fields start equal to AI suggestion
@@ -491,6 +496,9 @@ async def commit_import(
     db.add(batch)
     await db.flush()
 
+    from services.ai.rules_engine import RulesEngine
+    _rules_engine = RulesEngine()
+
     for (txn, h) in new_txns:
         try:
             txn_date = date_type.fromisoformat(txn.date)
@@ -508,6 +516,31 @@ async def commit_import(
             if txn.ai_confidence is not None
             else None
         )
+
+        # Learn from corrections: if user changed the AI category (or set one when AI had none),
+        # save as a merchant rule so future imports for the same pattern auto-apply it.
+        user_overrode = (
+            final_category
+            and txn.description
+            and final_category != txn.ai_category
+        )
+        if user_overrode:
+            try:
+                await _rules_engine.record_correction(
+                    description=txn.description,
+                    category=final_category,
+                    subcategory=final_subcategory or "",
+                    merchant_clean=txn.merchant or "",
+                    db=db,
+                    need_want_savings=txn.need_want_savings or None,
+                    fixed_variable=txn.fixed_variable or None,
+                    personal_work_shared=txn.personal_work_shared or None,
+                    is_reimbursable=txn.is_reimbursable,
+                    is_recurring=txn.is_recurring,
+                    tags=txn.tags or [],
+                )
+            except Exception as _e:
+                logger.warning("record_correction failed for %s: %s", txn.description, _e)
 
         t = Transaction(
             date=txn_date,
@@ -529,6 +562,11 @@ async def commit_import(
             fixed_variable=txn.fixed_variable or None,
             personal_work_shared=txn.personal_work_shared or None,
             is_reimbursable=txn.is_reimbursable,
+            expected_reimbursement=(
+                Decimal(str(round(txn.expected_reimbursement, 2)))
+                if txn.is_reimbursable and txn.expected_reimbursement is not None and txn.expected_reimbursement > 0
+                else None
+            ),
             is_recurring=txn.is_recurring,
             tags=txn.tags or [],
             reimbursement_status="to_submit" if txn.is_reimbursable else "not_reimbursable",
