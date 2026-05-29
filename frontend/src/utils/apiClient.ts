@@ -18,7 +18,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiError>) => {
-    if (error.response?.status === 401) {
+    const requestUrl = error.config?.url ?? ''
+    if (error.response?.status === 401 && !requestUrl.includes('/auth/logout')) {
       localStorage.removeItem('auth_token')
       localStorage.removeItem('auth_token_expiry')
       window.dispatchEvent(new CustomEvent('auth:expired'))

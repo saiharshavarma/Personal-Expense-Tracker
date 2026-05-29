@@ -8,17 +8,28 @@ from db.models import MerchantRule
 
 
 class RulesEngine:
-    async def match(self, description: str, db: AsyncSession) -> Optional[dict]:
+    async def load_rules(self, db: AsyncSession) -> List[MerchantRule]:
         """
-        Match description against merchant_rules table.
-        Returns categorization dict if any rule matches, else None.
-        Rules are ordered by confidence desc — first match wins.
+        Load all merchant rules from the DB once, ordered by confidence descending.
+        Call this once per batch and pass the result to match_cached() to avoid
+        an N×1 SELECT pattern when matching many transactions.
         """
         result = await db.execute(
-            select(MerchantRule).order_by(MerchantRule.confidence.desc())
+            # Primary: confidence DESC (highest-confidence rules win).
+            # Secondary: created_at ASC so that when two rules tie on confidence,
+            # the older (typically user-created) rule fires first — deterministic.
+            select(MerchantRule).order_by(
+                MerchantRule.confidence.desc(),
+                MerchantRule.created_at.asc(),
+            )
         )
-        rules = result.scalars().all()
+        return result.scalars().all()
 
+    def match_cached(self, description: str, rules: List[MerchantRule]) -> Optional[dict]:
+        """
+        Match description against a pre-loaded list of rules (sync, no DB call).
+        First match wins (rules ordered by confidence desc at load time).
+        """
         for rule in rules:
             if self._matches(description, rule):
                 return {
@@ -36,6 +47,14 @@ class RulesEngine:
                 }
         return None
 
+    async def match(self, description: str, db: AsyncSession) -> Optional[dict]:
+        """
+        Single-transaction convenience wrapper — loads rules from DB then matches.
+        For batch processing prefer load_rules() + match_cached() to avoid N×1 queries.
+        """
+        rules = await self.load_rules(db)
+        return self.match_cached(description, rules)
+
     def _matches(self, description: str, rule: MerchantRule) -> bool:
         desc = description.upper()
         pattern = rule.pattern.upper()
@@ -48,7 +67,11 @@ class RulesEngine:
             case "startswith":
                 return desc.startswith(pattern)
             case "regex":
-                return bool(re.search(rule.pattern, description, re.IGNORECASE))
+                try:
+                    return bool(re.search(rule.pattern, description, re.IGNORECASE))
+                except re.error:
+                    # Invalid regex stored in DB — skip rather than crash
+                    return False
             case _:
                 return pattern in desc
 

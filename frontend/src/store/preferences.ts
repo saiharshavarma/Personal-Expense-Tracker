@@ -25,7 +25,7 @@ interface PreferencesStore {
 
 const DEFAULT_PREFS: Preferences = {
   ai_provider: 'anthropic',
-  ai_model_categorization: 'claude-haiku-4-5',
+  ai_model_categorization: 'claude-haiku-4-5-20251001',
   ai_model_insights: 'claude-sonnet-4-5',
   ai_insights_opt_in: false,
   anthropic_api_key_set: false,

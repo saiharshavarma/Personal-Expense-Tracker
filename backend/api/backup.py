@@ -7,6 +7,7 @@ Creates a full JSON snapshot of all financial data and records it in BackupLog.
 import io
 import json
 import gzip
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
@@ -20,8 +21,10 @@ from api.auth import get_current_user
 from db.database import get_db
 from db.models import (
     BackupLog, Transaction, Account, Budget, Subscription,
-    Trip, UserPreferences,
+    Trip, UserPreferences, ReimbursementBatch, MerchantRule,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["backup"])
 
@@ -40,20 +43,24 @@ async def _build_snapshot(db: AsyncSession) -> dict:
         return {k: _serial(v) for k, v in obj.__dict__.items()
                 if not k.startswith("_")}
 
-    txs  = (await db.execute(select(Transaction).order_by(Transaction.date.desc()))).scalars().all()
-    acts = (await db.execute(select(Account))).scalars().all()
-    bgts = (await db.execute(select(Budget))).scalars().all()
-    subs = (await db.execute(select(Subscription))).scalars().all()
-    trips= (await db.execute(select(Trip))).scalars().all()
+    txs      = (await db.execute(select(Transaction).order_by(Transaction.date.desc()))).scalars().all()
+    acts     = (await db.execute(select(Account))).scalars().all()
+    bgts     = (await db.execute(select(Budget))).scalars().all()
+    subs     = (await db.execute(select(Subscription))).scalars().all()
+    trips    = (await db.execute(select(Trip))).scalars().all()
+    batches  = (await db.execute(select(ReimbursementBatch))).scalars().all()
+    rules    = (await db.execute(select(MerchantRule))).scalars().all()
 
     return {
-        "backup_version": "1.0",
+        "backup_version": "1.1",
         "created_at": datetime.utcnow().isoformat(),
-        "accounts":      [ser(a) for a in acts],
-        "transactions":  [ser(t) for t in txs],
-        "budgets":       [ser(b) for b in bgts],
-        "subscriptions": [ser(s) for s in subs],
-        "trips":         [ser(t) for t in trips],
+        "accounts":               [ser(a) for a in acts],
+        "transactions":           [ser(t) for t in txs],
+        "budgets":                [ser(b) for b in bgts],
+        "subscriptions":          [ser(s) for s in subs],
+        "trips":                  [ser(t) for t in trips],
+        "reimbursement_batches":  [ser(b) for b in batches],
+        "merchant_rules":         [ser(r) for r in rules],
     }
 
 
@@ -92,10 +99,11 @@ async def trigger_backup(
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
     except Exception as exc:
+        logger.error("Backup failed: %s", exc, exc_info=True)
         log = BackupLog(triggered_by="manual", status="failed")
         db.add(log)
         await db.commit()
-        raise HTTPException(status_code=500, detail=f"Backup failed: {exc}")
+        raise HTTPException(status_code=500, detail="Backup failed. Check server logs for details.")
 
 
 # ── Status ────────────────────────────────────────────────────────────────────

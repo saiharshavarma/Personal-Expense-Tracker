@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   RefreshCw, Plus, TrendingUp, Calendar, Star,
@@ -118,6 +119,10 @@ function SubscriptionSheet({
       else await api.post('/subscriptions', payload)
       onSaved()
       onClose()
+    } catch (e: unknown) {
+      // L-9: Surface save errors so the user knows what went wrong
+      const ex = e as { response?: { data?: { detail?: string } } }
+      toast.error(ex?.response?.data?.detail ?? 'Failed to save subscription')
     } finally {
       setSaving(false)
     }
@@ -343,6 +348,8 @@ export function Subscriptions() {
       setSubs(activeRes.data)
       setCancelled(allRes.data.filter((s: Subscription) => !s.is_active))
       setSummary(summaryRes.data)
+    } catch {
+      toast.error('Failed to load subscriptions.')
     } finally {
       setLoading(false)
     }
@@ -351,9 +358,13 @@ export function Subscriptions() {
   useEffect(() => { fetchAll() }, [])
 
   const handleCancel = async (id: string) => {
-    if (!confirm('Cancel this subscription?')) return
-    await api.delete(`/subscriptions/${id}`)
-    fetchAll()
+    if (!confirm('Cancel this subscription? This cannot be undone.')) return
+    try {
+      await api.delete(`/subscriptions/${id}`)
+      fetchAll()
+    } catch {
+      toast.error('Failed to cancel subscription.')
+    }
   }
 
   const handleEdit = (sub: Subscription) => { setEditing(sub); setSheetOpen(true) }
@@ -379,7 +390,9 @@ export function Subscriptions() {
   const SUMMARY_CARDS = [
     { label: 'Monthly Total', value: summary.total_monthly, sub: `${summary.count} active`, icon: RefreshCw },
     { label: 'Annual Total',  value: summary.total_annual,  sub: 'projected',                icon: TrendingUp },
-    { label: 'Personal',      value: summary.personal_monthly, sub: `${subs.filter(s => s.personal_work_shared !== 'work').length} subs`, icon: User },
+    // M-6: 'personal' count must exclude 'shared' — !== 'work' incorrectly
+    // includes 'shared' subscriptions in the personal bucket.
+    { label: 'Personal', value: summary.personal_monthly, sub: `${subs.filter(s => s.personal_work_shared === 'personal' || !s.personal_work_shared).length} subs`, icon: User },
     { label: 'Work',          value: summary.work_monthly,  sub: `${subs.filter(s => s.personal_work_shared === 'work').length} subs`, icon: Briefcase },
   ]
 

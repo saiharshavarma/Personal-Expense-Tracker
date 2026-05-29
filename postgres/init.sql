@@ -222,6 +222,7 @@ CREATE TABLE merchant_rules (
 CREATE TABLE user_preferences (
     id INTEGER PRIMARY KEY DEFAULT 1,
     default_budget_rule JSONB DEFAULT '{"needs": 50, "wants": 30, "savings": 20}',
+    budget_templates JSONB DEFAULT '[]'::jsonb,
     theme VARCHAR(20) DEFAULT 'light',
     default_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
     ai_provider VARCHAR(50) DEFAULT 'anthropic',

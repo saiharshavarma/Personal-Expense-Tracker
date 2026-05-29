@@ -1,7 +1,10 @@
 import json
+import logging
 from typing import List
 
 from services.ai.provider import AIProvider, AICategorizationResult, AIInsightResult
+
+logger = logging.getLogger(__name__)
 
 # ── Canonical taxonomy — must stay in sync with frontend/src/lib/categories.ts ──
 # These are the ONLY valid category/subcategory values.  The AI must pick from
@@ -105,7 +108,12 @@ class AnthropicProvider(AIProvider):
             if raw.startswith("json"):
                 raw = raw[4:]
 
-        results_raw = json.loads(raw)
+        try:
+            results_raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Anthropic categorize: failed to parse JSON response: %s | raw[:200]=%r", exc, raw[:200])
+            return []
+
         results = []
         for item in results_raw:
             results.append(AICategorizationResult(

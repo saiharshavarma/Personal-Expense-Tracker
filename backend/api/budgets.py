@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, List
 from decimal import Decimal
 from datetime import date
 
@@ -109,14 +109,19 @@ async def update_budget_preferences(
     wants = body.get("wants", 30)
     savings = body.get("savings", 20)
     if abs(needs + wants + savings - 100) > 0.1:
-        raise HTTPException(status_code=400, detail="needs + wants + savings must equal 100")
+        raise HTTPException(status_code=400, detail="Needs + wants + savings must equal 100.")
 
     result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
     prefs = result.scalar_one_or_none()
-    if prefs:
-        prefs.default_budget_rule = {"needs": needs, "wants": wants, "savings": savings}
-        prefs.updated_at = datetime.utcnow()
-        await db.commit()
+    if not prefs:
+        # C-9: Create the UserPreferences row if it doesn't exist yet.
+        # Without this guard, a new user's preferences are silently discarded
+        # because the UPDATE-only path hits nothing and returns stale defaults.
+        prefs = UserPreferences(id=1)
+        db.add(prefs)
+    prefs.default_budget_rule = {"needs": needs, "wants": wants, "savings": savings}
+    prefs.updated_at = datetime.utcnow()
+    await db.commit()
     return {"needs": needs, "wants": wants, "savings": savings}
 
 
@@ -150,7 +155,7 @@ async def delete_budget(
     await db.commit()
 
 
-@router.post("/copy-previous-month")
+@router.post("/copy-previous-month", status_code=201)
 async def copy_previous_month(
     month: int = Query(..., ge=1, le=12),
     year: int = Query(...),
@@ -254,6 +259,17 @@ async def get_actuals(
     # ── Build rows ────────────────────────────────────────────────────────────
     rows = []
     seen_pairs: set[tuple] = set()
+    # Track every category that appears in ANY budget row (cat- or sub-level).
+    seen_cats: set[str] = set()
+    # Track categories that have at least one subcategory-level budget row.
+    # Used to prevent double-counting spending totals when a category has BOTH
+    # a category-level budget AND subcategory-level budgets: the category-level
+    # row shows total spend for comparison, but the sub rows own the totals.
+    cats_with_sub_budgets: set[str] = set()
+    for b in all_budgets:
+        if b.subcategory:
+            cats_with_sub_budgets.add(b.category)
+
     total_budget = 0.0
     total_gross = 0.0
     total_reimbursed = 0.0
@@ -263,6 +279,7 @@ async def get_actuals(
         cat = b.category
         sub = b.subcategory
         seen_pairs.add((cat, sub))
+        seen_cats.add(cat)
 
         if sub:
             actual = spending_by_cat_sub.get((cat, sub), {})
@@ -297,12 +314,19 @@ async def get_actuals(
         })
 
         total_budget += budget_amount
-        total_gross += gross
-        total_reimbursed += reimbursed
+        # For totals: only accumulate spending from a category-level budget row
+        # when that category has NO subcategory budgets (which would double-count
+        # the same transactions across both the category row and sub rows).
+        if sub or cat not in cats_with_sub_budgets:
+            total_gross += gross
+            total_reimbursed += reimbursed
 
-    # Rows for unbudgeted categories (have spending but no category-level budget)
+    # Rows for unbudgeted categories (have spending but no category-level budget).
+    # Skip if the category already appears in seen_cats (i.e. it has at least
+    # one subcategory-level budget row) — showing a phantom category-level row
+    # with budget_amount=0 would double the spending display and clutter the table.
     for cat in sorted(spending_by_cat.keys()):
-        if (cat, None) not in seen_pairs:
+        if (cat, None) not in seen_pairs and cat not in seen_cats:
             actual = spending_by_cat[cat]
             gross = actual["gross"]
             reimbursed = actual["reimbursed"]
@@ -315,11 +339,13 @@ async def get_actuals(
                 "gross_spend": round(gross, 2),
                 "reimbursed": round(reimbursed, 2),
                 "net_personal": round(net, 2),
-                "remaining": 0.0,
+                # M-11: remaining for a $0-budget row is negative net spend (overspend).
+                "remaining": round(-net, 2),
                 "pct_used": 0.0,
-                "status": "safe",
+                # M-10: "unbudgeted" status distinguishes these rows from a budgeted
+                # category sitting at "safe" — the frontend can style them differently.
+                "status": "unbudgeted",
             })
-            # Don't double-count in totals (already counted via budget rows if budgeted)
             total_gross += gross
             total_reimbursed += reimbursed
 
@@ -347,7 +373,10 @@ async def get_actuals(
     )
     income_tagged = float(income_cat_result.scalar() or 0)
 
-    # 2) Fall back to all credit transactions that aren't transfers
+    # 2) Fall back to all credit transactions that aren't transfers.
+    # H-2: `category NOT IN (...)` evaluates to NULL when category IS NULL in SQL,
+    # which silently excludes uncategorised credits from the income total.
+    # Fix: explicitly OR-in the IS NULL check so NULL-category credits are included.
     income_all_result = await db.execute(
         select(func.sum(Transaction.amount).label("total"))
         .where(
@@ -355,7 +384,7 @@ async def get_actuals(
                 extract("month", Transaction.date) == month,
                 extract("year", Transaction.date) == year,
                 Transaction.direction == "credit",
-                Transaction.category.notin_(["Transfer", "Financial"]),
+                (Transaction.category.is_(None) | Transaction.category.notin_(["Transfer", "Financial"])),
             )
         )
     )
@@ -369,6 +398,9 @@ async def get_actuals(
     )
 
     # ── 50/30/20 breakdown ────────────────────────────────────────────────────
+    # Exclude "na" (not applicable) — these are transactions intentionally
+    # excluded from the need/want/savings classification (e.g. transfers,
+    # reimbursed expenses) and should not skew the rule percentages.
     nws_result = await db.execute(
         select(
             Transaction.need_want_savings,
@@ -380,6 +412,7 @@ async def get_actuals(
                 extract("year", Transaction.date) == year,
                 Transaction.direction == "debit",
                 Transaction.need_want_savings.isnot(None),
+                Transaction.need_want_savings.notin_(["na", "none"]),
             )
         )
         .group_by(Transaction.need_want_savings)
@@ -431,3 +464,141 @@ async def get_actuals(
         },
         "nws_summary": nws_summary,
     }
+
+
+# ── Budget Templates ─────────────────────────────────────────────────────────
+# Global default amounts per category/subcategory stored in UserPreferences.
+# These are used as starting values when applying templates to a new month.
+
+class TemplateUpsert(BaseModel):
+    category: str
+    subcategory: Optional[str] = None
+    amount: Decimal
+
+
+def _get_template_key(category: str, subcategory: Optional[str]) -> str:
+    return f"{category}||{subcategory or ''}"
+
+
+@router.get("/templates")
+async def list_templates(
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all global budget templates from UserPreferences."""
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    templates = (prefs.budget_templates or []) if prefs else []
+    return templates
+
+
+@router.post("/templates", status_code=200)
+async def upsert_template(
+    body: TemplateUpsert,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update a global budget template for the given category/subcategory."""
+    from datetime import datetime
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    if not prefs:
+        prefs = UserPreferences(id=1)
+        db.add(prefs)
+
+    templates: list = list(prefs.budget_templates or [])
+    # Find existing entry for this category+subcategory
+    found = False
+    for t in templates:
+        if t.get("category") == body.category and t.get("subcategory") == body.subcategory:
+            t["amount"] = float(body.amount)
+            found = True
+            break
+    if not found:
+        templates.append({
+            "category": body.category,
+            "subcategory": body.subcategory,
+            "amount": float(body.amount),
+        })
+
+    # SQLAlchemy JSONB: reassign to trigger change detection
+    prefs.budget_templates = templates
+    prefs.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"templates": templates}
+
+
+@router.delete("/templates", status_code=200)
+async def delete_template(
+    category: str = Query(...),
+    subcategory: Optional[str] = Query(None),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a template entry for the given category/subcategory."""
+    from datetime import datetime
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    if not prefs:
+        return {"templates": []}
+
+    templates = [
+        t for t in (prefs.budget_templates or [])
+        if not (t.get("category") == category and t.get("subcategory") == subcategory)
+    ]
+    prefs.budget_templates = templates
+    prefs.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"templates": templates}
+
+
+@router.post("/apply-templates", status_code=201)
+async def apply_templates(
+    month: int = Query(..., ge=1, le=12),
+    year: int = Query(...),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Copy global budget templates into the given month as Budget rows.
+    Already-existing (category, subcategory) pairs are skipped.
+    Returns {created, skipped}.
+    """
+    result = await db.execute(select(UserPreferences).where(UserPreferences.id == 1))
+    prefs = result.scalar_one_or_none()
+    templates: list = (prefs.budget_templates or []) if prefs else []
+
+    if not templates:
+        raise HTTPException(status_code=404, detail="No budget templates configured. Add templates in Settings first.")
+
+    created = 0
+    skipped = 0
+    for t in templates:
+        cat = t.get("category")
+        sub = t.get("subcategory") or None
+        amount = t.get("amount", 0)
+        if not cat:
+            continue
+
+        sub_filter = (
+            Budget.subcategory == sub if sub else Budget.subcategory.is_(None)
+        )
+        exists = (await db.execute(
+            select(Budget).where(
+                and_(Budget.month == month, Budget.year == year,
+                     Budget.category == cat, sub_filter)
+            )
+        )).scalar_one_or_none()
+
+        if exists:
+            skipped += 1
+            continue
+
+        db.add(Budget(
+            month=month, year=year, category=cat, subcategory=sub,
+            budget_amount=Decimal(str(amount)),
+        ))
+        created += 1
+
+    await db.commit()
+    return {"created": created, "skipped": skipped, "month": month, "year": year}

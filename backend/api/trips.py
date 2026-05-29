@@ -29,6 +29,10 @@ class TripCreate(BaseModel):
 
 class TripUpdate(TripCreate):
     name: Optional[str] = None
+    # C-1: Override parent's default "business" so a PATCH without trip_type
+    # does NOT silently reset the field.  model_dump(exclude_none=True) below
+    # means None values are simply skipped, preserving the existing DB value.
+    trip_type: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -117,6 +121,10 @@ async def auto_tag_trip_expenses(
             Transaction.date <= trip.end_date,
             Transaction.direction == "debit",
             Transaction.business_trip_id.is_(None),
+            # H-11: Exclude recurring charges (rent, subscriptions, utilities).
+            # Auto-tag should only capture one-off trip expenses, not standing
+            # obligations that happen to fall inside the travel window.
+            Transaction.is_recurring != True,
         )
     )
     untagged = result.scalars().all()
@@ -126,7 +134,13 @@ async def auto_tag_trip_expenses(
         t.updated_at = datetime.utcnow()
 
     await db.commit()
-    return {"tagged_count": len(untagged), "trip_id": str(trip_id)}
+    # H-11: Return tagged transaction IDs so the frontend can refresh the list
+    # without a round-trip and the user can audit exactly which transactions were tagged.
+    return {
+        "tagged_count": len(untagged),
+        "trip_id": str(trip_id),
+        "tagged_transaction_ids": [str(t.id) for t in untagged],
+    }
 
 
 @router.get("/{trip_id}/expenses")
@@ -134,15 +148,33 @@ async def get_trip_expenses(trip_id: uuid.UUID, _user=Depends(get_current_user),
     trip = await db.get(Trip, trip_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
+    # C-6: Filter to debit direction only — credits (refunds) tagged to a trip
+    # should be handled via received_reimbursement on the debit transaction rather
+    # than appearing as negative expenses here, which would confuse total_spent.
     result = await db.execute(
-        select(Transaction).where(Transaction.business_trip_id == trip_id).order_by(Transaction.date)
+        select(Transaction).where(
+            Transaction.business_trip_id == trip_id,
+            Transaction.direction == "debit",
+        ).order_by(Transaction.date)
     )
     txns = result.scalars().all()
-    total = sum(float(t.amount) for t in txns)
+    # total_spent is net (gross minus any received reimbursement) for accurate
+    # budget tracking.  Each expense also exposes both gross and net amounts so
+    # the frontend can show whichever is appropriate without ambiguity.
+    total = sum(float(t.amount) - float(t.received_reimbursement or 0) for t in txns)
     return {
         "trip": _serialize(trip),
-        "expenses": [{"id": str(t.id), "date": t.date.isoformat(), "amount": float(t.amount),
-                      "merchant": t.merchant or t.description, "category": t.category} for t in txns],
-        "total_spent": total,
-        "budget_remaining": float(trip.budget) - total if trip.budget else None,
+        "expenses": [
+            {
+                "id": str(t.id),
+                "date": t.date.isoformat(),
+                "amount": float(t.amount),               # gross
+                "net_amount": round(float(t.amount) - float(t.received_reimbursement or 0), 2),  # net personal cost
+                "merchant": t.merchant or t.description,
+                "category": t.category,
+            }
+            for t in txns
+        ],
+        "total_spent": round(total, 2),
+        "budget_remaining": round(float(trip.budget) - total, 2) if trip.budget else None,
     }

@@ -6,7 +6,7 @@ from typing import Optional, List, Any
 import sqlalchemy as sa
 from sqlalchemy import (
     String, Integer, Boolean, Text, Date, DateTime, Numeric,
-    BigInteger, Computed, ForeignKey, UniqueConstraint, CheckConstraint,
+    BigInteger, Computed, ForeignKey, CheckConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID, JSONB, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -143,6 +143,12 @@ class ImportBatch(Base):
 # ============================================================
 class Transaction(Base):
     __tablename__ = "transactions"
+    # L-12: Guard against negative amounts at the DB level. All monetary values
+    # stored in `amount` represent absolute magnitudes; directionality is expressed
+    # via the `direction` column ("debit" / "credit"), not a sign on `amount`.
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="ck_transactions_amount_non_negative"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=_uuid)
     date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -161,7 +167,14 @@ class Transaction(Base):
     personal_work_shared: Mapped[Optional[str]] = mapped_column(String(20))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     tags = sa.Column(ARRAY(Text()), nullable=True)
-    # reimbursement
+    # ── Reimbursement fields ──────────────────────────────────────────────────
+    # L-13: Relationship between is_reimbursable and reimbursement_status:
+    #   is_reimbursable=False  →  reimbursement_status MUST be "not_reimbursable"
+    #   is_reimbursable=True   →  reimbursement_status ∈ {to_submit, submitted,
+    #                              approved, paid, partial, rejected}
+    # "not_reimbursable" is the only status that may appear when is_reimbursable
+    # is False. Conversely, a reimbursable transaction should never sit at
+    # "not_reimbursable" — use "to_submit" as the default for those rows.
     is_reimbursable: Mapped[bool] = mapped_column(Boolean, default=False)
     reimbursement_source: Mapped[Optional[str]] = mapped_column(String(50))
     reimbursement_status: Mapped[str] = mapped_column(String(50), default="not_reimbursable")
@@ -216,7 +229,8 @@ class Transaction(Base):
 # ============================================================
 class Budget(Base):
     __tablename__ = "budgets"
-    __table_args__ = (UniqueConstraint("month", "year", "category", "subcategory"),)
+    # Uniqueness is enforced by partial indexes created in the migration (main.py)
+    # and NOT by a table-level UniqueConstraint, which would conflict with those indexes.
 
     id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=_uuid)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -284,6 +298,9 @@ class UserPreferences(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     default_budget_rule = sa.Column(JSONB, default={"needs": 50, "wants": 30, "savings": 20})
+    # Global budget templates: list of {category, subcategory, amount} dicts
+    # used as defaults when creating a new monthly budget via "Apply Templates".
+    budget_templates = sa.Column(JSONB, default=list, nullable=True)
     theme: Mapped[str] = mapped_column(String(20), default="light")
     default_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(PgUUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"))
     ai_provider: Mapped[str] = mapped_column(String(50), default="anthropic")

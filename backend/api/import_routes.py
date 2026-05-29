@@ -13,7 +13,7 @@ from api.auth import get_current_user
 from db.database import get_db
 from db.models import ImportBatch, Transaction, UserPreferences
 from services.dedup import compute_duplicate_hash
-from services.ai.categorizer import categorize_transactions, confidence_to_color
+from services.ai.categorizer import categorize_transactions, confidence_to_color, YELLOW_THRESHOLD
 from services.parsers.chase_parser import ChaseParser
 from services.parsers.boa_parser import BankOfAmericaParser
 from services.parsers.amex_parser import AmexParser
@@ -49,17 +49,25 @@ async def _get_ai_provider(db: AsyncSession):
     provider_name = prefs.ai_provider or "anthropic"
     if provider_name == "anthropic" and prefs.anthropic_api_key:
         from services.ai.anthropic_provider import AnthropicProvider
+        cat_m = prefs.ai_model_categorization or "claude-haiku-4-5-20251001"
+        ins_m = prefs.ai_model_insights or "claude-sonnet-4-5"
+        if cat_m.startswith("gpt"): cat_m = "claude-haiku-4-5-20251001"
+        if ins_m.startswith("gpt"): ins_m = "claude-sonnet-4-5"
         return AnthropicProvider(
             api_key=prefs.anthropic_api_key,
-            categorization_model=prefs.ai_model_categorization or "claude-haiku-4-5-20251001",
-            insights_model=prefs.ai_model_insights or "claude-sonnet-4-5",
+            categorization_model=cat_m,
+            insights_model=ins_m,
         )
     elif provider_name == "openai" and prefs.openai_api_key:
         from services.ai.openai_provider import OpenAIProvider
+        cat_m = prefs.ai_model_categorization or "gpt-4o-mini"
+        ins_m = prefs.ai_model_insights or "gpt-4o"
+        if cat_m.startswith("claude"): cat_m = "gpt-4o-mini"
+        if ins_m.startswith("claude"): ins_m = "gpt-4o"
         return OpenAIProvider(
             api_key=prefs.openai_api_key,
-            categorization_model=prefs.ai_model_categorization or "gpt-4o-mini",
-            insights_model=prefs.ai_model_insights or "gpt-4o",
+            categorization_model=cat_m,
+            insights_model=ins_m,
         )
     return None
 
@@ -81,7 +89,7 @@ async def _ingest_file(
     try:
         parsed_txns = parser.parse(file_bytes, filename)
     except Exception as e:
-        logger.error(f"Parser error for {filename}: {e}")
+        logger.error("Parser error for %s: %s", filename, e)
         raise HTTPException(status_code=422, detail=f"Could not parse file: {e}")
 
     if not parsed_txns:
@@ -89,24 +97,32 @@ async def _ingest_file(
 
     account_uuid = uuid.UUID(account_id) if account_id else None
 
-    # Dedup pass
+    # Dedup pass — single DB round-trip for the whole file
     new_txns = []
-    skipped = 0
     seen_hashes: set = set()
+    candidate_hashes: dict = {}  # hash → ParsedTransaction
 
     for txn in parsed_txns:
-        h = compute_duplicate_hash(txn.date, txn.amount, txn.description)
-        if h in seen_hashes:
-            skipped += 1
-            continue
-        seen_hashes.add(h)
-        existing = await db.execute(
-            select(Transaction.id).where(Transaction.duplicate_hash == h)
+        h = compute_duplicate_hash(txn.date, txn.amount, txn.description, txn.direction)
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            candidate_hashes[h] = txn
+
+    # One query checks all hashes against the DB at once
+    existing_result = await db.execute(
+        select(Transaction.duplicate_hash).where(
+            Transaction.duplicate_hash.in_(list(candidate_hashes.keys()))
         )
-        if existing.scalar_one_or_none() is not None:
-            skipped += 1
-            continue
-        new_txns.append((txn, h))
+    )
+    existing_hashes = {row[0] for row in existing_result.all()}
+
+    # within-file dupes + DB dupes
+    skipped = (len(parsed_txns) - len(candidate_hashes)) + sum(
+        1 for h in candidate_hashes if h in existing_hashes
+    )
+    for h, txn in candidate_hashes.items():
+        if h not in existing_hashes:
+            new_txns.append((txn, h))
 
     total_parsed = len(parsed_txns)
 
@@ -163,9 +179,15 @@ async def _ingest_file(
 
     cat_results = []
     try:
-        cat_results = await categorize_transactions(txn_dicts, db, ai_provider)
+        import asyncio as _asyncio
+        cat_results = await _asyncio.wait_for(
+            categorize_transactions(txn_dicts, db, ai_provider),
+            timeout=90.0,  # 90-second cap — prevents the import from hanging on LLM slowness
+        )
+    except _asyncio.TimeoutError:
+        logger.warning("AI categorization timed out after 90s; all transactions marked for review")
     except Exception as e:
-        logger.warning(f"AI categorization failed during import: {e}")
+        logger.warning("AI categorization failed during import: %s", e)
 
     cat_map = {r.transaction_id: r for r in cat_results}
     needs_review_count = 0
@@ -187,7 +209,7 @@ async def _ingest_file(
                 t.personal_work_shared = r.personal_work_shared
             if r.is_reimbursable:
                 t.is_reimbursable = r.is_reimbursable
-                t.reimbursement_status = "pending"
+                t.reimbursement_status = "to_submit"
             if r.is_recurring:
                 t.is_recurring = r.is_recurring
             if r.suggested_tags:
@@ -207,12 +229,13 @@ async def _ingest_file(
             t.needs_review = True
             needs_review_count += 1
 
-        # Generic parser: always needs review
+        # Generic parser: always needs review regardless of AI confidence.
+        # Only increment the count for items that weren't already counted above
+        # (i.e. high-confidence items that were cleared — they now get forced back).
         if is_generic:
             t.needs_review = True
-            if tid in cat_map:
-                needs_review_count += 1 if not cat_map[tid].confidence >= AUTO_THRESHOLD else 0
-            else:
+            if tid in cat_map and cat_map[tid].confidence >= AUTO_THRESHOLD:
+                # Was auto-cleared above; force it into review and count it
                 needs_review_count += 1
 
     batch.imported_transactions = len(txn_objects)
@@ -308,17 +331,22 @@ async def confirm_import(
     batch = result.scalar_one_or_none()
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.status == "complete":
+        raise HTTPException(status_code=409, detail="Batch has already been confirmed")
 
     if body.accept_all:
-        # Accept AI suggestions for all high-confidence transactions in this batch
+        # C-2: Use AUTO_THRESHOLD (0.90) not YELLOW_THRESHOLD (0.75) for bulk accept.
+        # Yellow-band transactions (0.75–0.89) need human review; bulk-accepting them
+        # would silently apply uncertain AI suggestions.
         txn_result = await db.execute(
             select(Transaction).where(
                 Transaction.import_batch_id == batch_uuid,
                 Transaction.needs_review == True,
-                Transaction.ai_confidence >= Decimal("0.750"),
+                Transaction.ai_confidence >= Decimal(str(AUTO_THRESHOLD)),
             )
         )
         txns = txn_result.scalars().all()
+        accepted = 0
         for t in txns:
             if t.ai_category:
                 t.category = t.ai_category
@@ -327,6 +355,10 @@ async def confirm_import(
             t.needs_review = False
             t.ai_reviewed = True
             t.updated_at = datetime.utcnow()
+            accepted += 1
+        # H-10: Keep needs_review_count accurate
+        if accepted > 0 and batch.needs_review_count > 0:
+            batch.needs_review_count = max(0, batch.needs_review_count - accepted)
 
     batch.status = "complete"
     await db.commit()
@@ -363,8 +395,8 @@ async def get_review_queue(
             "description": t.description,
             "amount": float(t.amount),
             "direction": t.direction,
-            # Return confidence as 0-100 for frontend
-            "ai_confidence": round(float(t.ai_confidence) * 100) if t.ai_confidence is not None else None,
+            # Return confidence as 0–1 float (same scale as GET /transactions)
+            "ai_confidence": round(float(t.ai_confidence), 3) if t.ai_confidence is not None else None,
             "ai_category": t.ai_category,
             "ai_subcategory": t.ai_subcategory,
             "category": t.category,
@@ -410,27 +442,42 @@ async def review_queue_action(
         return {"status": "deleted", "id": transaction_id}
 
     if action in ("accept", "edit"):
-        if action == "edit" and category:
-            t.category = category
-            t.subcategory = body.get("subcategory") or t.ai_subcategory
+        if action == "edit":
+            # Always apply all non-category fields regardless of whether category is provided
+            if category:
+                category_changed = t.category != category
+                t.category = category
+                if "subcategory" in body:
+                    # Caller explicitly set (or cleared) the subcategory
+                    t.subcategory = body.get("subcategory") or None
+                elif category_changed:
+                    # Category swapped but no subcategory supplied — clear any stale
+                    # subcategory that belonged to the old category
+                    t.subcategory = None
+                else:
+                    # Category unchanged and no subcategory in payload — keep existing
+                    # value, or fall back to the AI suggestion if still blank
+                    t.subcategory = t.subcategory or t.ai_subcategory or None
             if body.get("merchant_clean"):
                 t.merchant = body["merchant_clean"]
-            if body.get("need_want_savings"):
-                t.need_want_savings = body["need_want_savings"]
+            # H-14: Check key presence (not truthiness) so that an explicit empty string
+            # or None value can be used to clear the field.
+            if "need_want_savings" in body:
+                t.need_want_savings = body["need_want_savings"] or None
             if body.get("fixed_variable") is not None:
                 t.fixed_variable = body["fixed_variable"] or None
             if body.get("personal_work_shared") is not None:
                 t.personal_work_shared = body["personal_work_shared"] or None
             if "is_reimbursable" in body:
                 t.is_reimbursable = bool(body["is_reimbursable"])
-                t.reimbursement_status = "pending" if t.is_reimbursable else "not_reimbursable"
+                t.reimbursement_status = "to_submit" if t.is_reimbursable else "not_reimbursable"
             if "is_recurring" in body:
                 t.is_recurring = bool(body["is_recurring"])
             if "tags" in body and isinstance(body["tags"], list):
                 t.tags = body["tags"]
 
-            # Learn: save correction as merchant rule
-            if t.description:
+            # Learn: save correction as merchant rule only when a category was provided
+            if category and t.description:
                 from services.ai.rules_engine import RulesEngine
                 await RulesEngine().record_correction(
                     description=t.description,
@@ -455,6 +502,11 @@ async def review_queue_action(
         t.needs_review = False
         t.ai_reviewed = True
         t.updated_at = datetime.utcnow()
+        # H-10: Decrement the batch's needs_review_count to keep it accurate
+        if t.import_batch_id:
+            batch_obj = await db.get(ImportBatch, t.import_batch_id)
+            if batch_obj and batch_obj.needs_review_count > 0:
+                batch_obj.needs_review_count = max(0, batch_obj.needs_review_count - 1)
         await db.commit()
         return {"status": "updated", "id": transaction_id}
 
@@ -479,7 +531,12 @@ async def bulk_accept(
     result = await db.execute(q)
     txns = result.scalars().all()
     updated = 0
+    batch_decrements: dict[uuid.UUID, int] = {}
     for t in txns:
+        # C-3: Skip zero-confidence transactions — they have no AI suggestion to apply.
+        # They must be manually reviewed; silently writing "Other" would corrupt data.
+        if t.ai_confidence is not None and float(t.ai_confidence) == 0.0:
+            continue
         if t.ai_category:
             t.category = t.ai_category
         if t.ai_subcategory:
@@ -488,6 +545,15 @@ async def bulk_accept(
         t.ai_reviewed = True
         t.updated_at = datetime.utcnow()
         updated += 1
+        # H-10: Track decrements per batch
+        if t.import_batch_id:
+            batch_decrements[t.import_batch_id] = batch_decrements.get(t.import_batch_id, 0) + 1
+
+    # H-10: Apply batch needs_review_count decrements
+    for bid, decrement in batch_decrements.items():
+        batch_obj = await db.get(ImportBatch, bid)
+        if batch_obj and batch_obj.needs_review_count > 0:
+            batch_obj.needs_review_count = max(0, batch_obj.needs_review_count - decrement)
 
     await db.commit()
     return {"accepted": updated}

@@ -9,6 +9,7 @@ import { TopBar } from '@/components/layout/TopBar'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { DateRangePicker, defaultRange, type DateRange } from '@/components/DateRangePicker'
 import { usePreferencesStore } from '@/store'
 import { api } from '@/utils/apiClient'
@@ -119,6 +120,133 @@ function OptInGate({ hasKey }: { hasKey: boolean }) {
   )
 }
 
+// ── Markdown renderer ────────────────────────────────────────────────────────
+
+function renderInline(s: string): React.ReactNode {
+  const parts: React.ReactNode[] = []
+  // Matches: ***bold+italic***, **bold**, *italic*, `code`
+  const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)/g
+  let last = 0
+  let k = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(s)) !== null) {
+    if (match.index > last) parts.push(<span key={k++}>{s.slice(last, match.index)}</span>)
+    if (match[2])      parts.push(<strong key={k++}><em>{match[2]}</em></strong>)
+    else if (match[3]) parts.push(<strong key={k++}>{match[3]}</strong>)
+    else if (match[4]) parts.push(<em key={k++}>{match[4]}</em>)
+    else if (match[5]) parts.push(
+      <code key={k++}
+        className="bg-black/10 dark:bg-white/10 px-1 py-0.5 rounded text-xs font-mono">
+        {match[5]}
+      </code>
+    )
+    last = match.index + match[0].length
+  }
+  if (last < s.length) parts.push(<span key={k++}>{s.slice(last)}</span>)
+  return parts.length === 1 ? parts[0] : <>{parts}</>
+}
+
+function renderMarkdown(text: string): React.ReactNode {
+  const lines = text.split('\n')
+  const nodes: React.ReactNode[] = []
+  let listItems: React.ReactNode[] = []
+  let listType: 'ul' | 'ol' | null = null
+  let inCode = false
+  let codeLines: string[] = []
+  let key = 0
+
+  function flushList() {
+    if (!listType || listItems.length === 0) return
+    nodes.push(
+      listType === 'ul'
+        ? <ul key={key++} className="list-disc ml-5 space-y-0.5 my-1 text-sm">{listItems}</ul>
+        : <ol key={key++} className="list-decimal ml-5 space-y-0.5 my-1 text-sm">{listItems}</ol>
+    )
+    listItems = []
+    listType = null
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // ── Code block ──
+    if (trimmed.startsWith('```')) {
+      if (!inCode) {
+        flushList()
+        inCode = true
+        codeLines = []
+      } else {
+        nodes.push(
+          <pre key={key++}
+            className="bg-black/10 dark:bg-white/10 rounded-lg p-3 my-2 text-xs font-mono overflow-x-auto whitespace-pre">
+            <code>{codeLines.join('\n')}</code>
+          </pre>
+        )
+        inCode = false
+        codeLines = []
+      }
+      continue
+    }
+    if (inCode) { codeLines.push(line); continue }
+
+    // ── Headings ──
+    if (trimmed.startsWith('### ')) {
+      flushList()
+      nodes.push(<p key={key++} className="font-semibold text-sm mt-3 mb-0.5">{trimmed.slice(4)}</p>)
+      continue
+    }
+    if (trimmed.startsWith('## ')) {
+      flushList()
+      nodes.push(<p key={key++} className="font-bold text-sm mt-3 mb-1">{trimmed.slice(3)}</p>)
+      continue
+    }
+    if (trimmed.startsWith('# ')) {
+      flushList()
+      nodes.push(<p key={key++} className="font-bold text-base mt-3 mb-1">{trimmed.slice(2)}</p>)
+      continue
+    }
+
+    // ── Bullet list ──
+    if (trimmed.match(/^[-*] /)) {
+      if (listType === 'ol') flushList()
+      listType = 'ul'
+      listItems.push(<li key={key++} className="leading-snug">{renderInline(trimmed.slice(2))}</li>)
+      continue
+    }
+
+    // ── Numbered list ──
+    const numMatch = trimmed.match(/^(\d+)\. (.+)$/)
+    if (numMatch) {
+      if (listType === 'ul') flushList()
+      listType = 'ol'
+      listItems.push(<li key={key++} className="leading-snug">{renderInline(numMatch[2])}</li>)
+      continue
+    }
+
+    // ── Horizontal rule ──
+    if (trimmed.match(/^[-*_]{3,}$/)) {
+      flushList()
+      nodes.push(<hr key={key++} className="border-border my-2 opacity-40" />)
+      continue
+    }
+
+    // ── Empty line ──
+    if (trimmed === '') {
+      flushList()
+      if (nodes.length > 0) nodes.push(<div key={key++} className="h-1.5" />)
+      continue
+    }
+
+    // ── Normal paragraph ──
+    flushList()
+    nodes.push(<p key={key++} className="text-sm leading-relaxed">{renderInline(trimmed)}</p>)
+  }
+
+  flushList()
+  return <div className="space-y-0.5">{nodes}</div>
+}
+
 // ── Chat message bubble ──────────────────────────────────────────────────────
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
@@ -144,8 +272,12 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
           ? 'bg-destructive/10 text-destructive border border-destructive/20 rounded-tl-sm'
           : 'bg-muted text-foreground rounded-tl-sm'
       }`}>
-        <p className="whitespace-pre-wrap">{msg.text}</p>
-        <p className={`text-xs mt-1 opacity-60 ${isUser ? 'text-right' : ''}`}>
+        {/* User messages and errors stay as plain text; AI responses get markdown */}
+        {isUser || msg.error
+          ? <p className="whitespace-pre-wrap">{msg.text}</p>
+          : renderMarkdown(msg.text)
+        }
+        <p className={`text-xs mt-1.5 opacity-60 ${isUser ? 'text-right' : ''}`}>
           {msg.timestamp.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
         </p>
       </div>
@@ -286,9 +418,10 @@ export function AskAI() {
 
       {prefsLoading ? (
         <Card>
-          <CardContent className="py-12 flex flex-col items-center gap-4">
-            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Checking AI configuration…</p>
+          <CardContent className="py-8 space-y-3">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
           </CardContent>
         </Card>
       ) : !isOptedIn ? (

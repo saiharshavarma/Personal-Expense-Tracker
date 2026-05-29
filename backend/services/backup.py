@@ -1,20 +1,24 @@
-import asyncio
-import gzip
-import os
-import shutil
-from datetime import datetime
-from pathlib import Path
+"""
+Backup service stubs.
+
+The active backup implementation lives in api/backup.py (_build_snapshot).
+It creates a full JSON snapshot (transactions, accounts, budgets, subscriptions,
+trips, reimbursement batches, merchant rules) and streams it as a gzip download.
+
+These pg_dump-based stubs are retained as placeholders but are not called by
+any active code path.
+"""
 
 
 async def trigger_backup(db_url: str, backup_dir: str = "~/Finance/Backups", to_icloud: bool = True) -> dict:
-    """
-    Phase 12: pg_dump → gzip → save to backup_dir (+ iCloud if available).
-    Filename format: YYYY-MM-DD-HH.sql.gz
-    Same day + no changes since last backup → skip.
-    """
-    raise NotImplementedError("Backup system implemented in Phase 12")
+    """Placeholder — pg_dump approach not implemented. See api/backup.py."""
+    raise NotImplementedError(
+        "pg_dump backup not implemented. Use the JSON snapshot endpoint at POST /api/backup/trigger."
+    )
 
 
 async def get_backup_status() -> dict:
-    """Phase 12: Return last backup time and size."""
-    raise NotImplementedError("Implemented in Phase 12")
+    """Placeholder — see GET /api/backup/status."""
+    raise NotImplementedError(
+        "Use GET /api/backup/status for backup status."
+    )

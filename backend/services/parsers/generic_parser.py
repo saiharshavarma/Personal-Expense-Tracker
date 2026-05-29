@@ -111,7 +111,7 @@ class GenericParser(BaseParser):
                     if raw_amount is None:
                         continue
                     amount = abs(raw_amount)
-                    direction = "debit" if raw_amount >= 0 else "credit"
+                    direction = "credit" if raw_amount > 0 else "debit"
                 else:
                     continue
 
@@ -164,7 +164,7 @@ class GenericParser(BaseParser):
                                             date=txn_date,
                                             description=desc,
                                             amount=abs(raw_amount),
-                                            direction="debit" if raw_amount >= 0 else "credit",
+                                            direction="credit" if raw_amount > 0 else "debit",
                                         ))
                                     break
 
@@ -179,7 +179,7 @@ class GenericParser(BaseParser):
                             txn_date = _parse_date(dates[0])
                             if not txn_date:
                                 continue
-                            raw_amount = _parse_amount(amounts[-1])
+                            raw_amount = _parse_amount(amounts[0])
                             if not raw_amount:
                                 continue
                             # Description: everything between last date and first amount
@@ -192,7 +192,7 @@ class GenericParser(BaseParser):
                                 date=txn_date,
                                 description=desc,
                                 amount=abs(raw_amount),
-                                direction="debit" if raw_amount >= 0 else "credit",
+                                direction="credit" if raw_amount > 0 else "debit",
                             ))
         except Exception:
             pass

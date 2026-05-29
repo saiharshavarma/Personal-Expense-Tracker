@@ -1,8 +1,11 @@
 import json
+import logging
 from typing import List
 
 from services.ai.provider import AIProvider, AICategorizationResult, AIInsightResult
 from services.ai.anthropic_provider import CATEGORIES, SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(AIProvider):
@@ -38,12 +41,25 @@ class OpenAIProvider(AIProvider):
         )
 
         raw = response.choices[0].message.content.strip()
-        parsed = json.loads(raw)
-        # OpenAI json_object mode may wrap array in a key
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("OpenAI categorize: failed to parse JSON response: %s | raw[:200]=%r", exc, raw[:200])
+            return []
+
+        # OpenAI json_object mode may wrap the array in a key
         if isinstance(parsed, dict):
-            results_raw = parsed.get("transactions") or parsed.get("results") or list(parsed.values())[0]
+            results_raw = (
+                parsed.get("transactions")
+                or parsed.get("results")
+                or (list(parsed.values())[0] if parsed else [])
+            )
         else:
             results_raw = parsed
+
+        if not isinstance(results_raw, list):
+            logger.warning("OpenAI categorize: unexpected JSON structure, keys=%s", list(parsed.keys()) if isinstance(parsed, dict) else type(parsed))
+            return []
 
         results = []
         for item in results_raw:

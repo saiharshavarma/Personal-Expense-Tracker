@@ -30,7 +30,11 @@ def _resolve_range(
 
     # ── explicit date range ───────────────────────────────────────────────────
     if date_from is not None or date_to is not None:
-        df = date_from or date(today.year - 1, today.month, today.day)
+        # L-7: Cap day to the last day of the target month to prevent a crash when
+        # today is Feb 29 on a leap year and last year was not a leap year.
+        _prev_year = today.year - 1
+        _capped_day = min(today.day, monthrange(_prev_year, today.month)[1])
+        df = date_from or date(_prev_year, today.month, _capped_day)
         dt = date_to or today
         days = (dt - df).days + 1
         prev_dt = df - timedelta(days=1)
@@ -65,12 +69,20 @@ def _resolve_range(
     return None, None, None, None, "All time", True
 
 
+def _reimb_filters(exclude: bool) -> list:
+    """Return SQLAlchemy clauses to exclude reimbursable transactions when requested."""
+    if not exclude:
+        return []
+    return [Transaction.is_reimbursable != True]
+
+
 async def build_aggregated_context(
     db: AsyncSession,
     month: Optional[int] = None,
     year: Optional[int] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    exclude_reimbursable: bool = False,
 ) -> dict:
     """
     Build sanitized context for AI insights.
@@ -80,6 +92,7 @@ async def build_aggregated_context(
     df, dt, prev_df, prev_dt, period_label, is_all_time = _resolve_range(
         month, year, date_from, date_to
     )
+    reimb = _reimb_filters(exclude_reimbursable)
 
     # Build SQLAlchemy filter clauses
     if is_all_time:
@@ -90,24 +103,21 @@ async def build_aggregated_context(
         prev_where = [Transaction.date >= prev_df, Transaction.date <= prev_dt]
 
     # ── Income + expenses for period ──────────────────────────────────────────
-    period_rows = (await db.execute(
-        select(Transaction.direction, func.sum(Transaction.amount).label("total"))
-        .where(*main_where)
-        .group_by(Transaction.direction)
-    )).all()
-    income = 0.0
-    expenses = 0.0
-    for r in period_rows:
-        if r.direction == "credit":
-            income = float(r.total or 0)
-        else:
-            expenses = float(r.total or 0)
+    income = float((await db.execute(
+        select(func.sum(Transaction.amount).label("total"))
+        .where(Transaction.direction == "credit", *main_where)
+    )).scalar() or 0)
+
+    expenses = float((await db.execute(
+        select(func.sum(Transaction.amount).label("total"))
+        .where(Transaction.direction == "debit", *main_where, *reimb)
+    )).scalar() or 0)
 
     # ── Previous period expenses ──────────────────────────────────────────────
     if prev_where:
         prev_exp = float((await db.execute(
             select(func.sum(Transaction.amount))
-            .where(Transaction.direction == "debit", *prev_where)
+            .where(Transaction.direction == "debit", *prev_where, *reimb)
         )).scalar() or 0)
     else:
         prev_exp = 0.0  # no comparison for all-time
@@ -115,7 +125,8 @@ async def build_aggregated_context(
     # ── Category breakdown (top 10 by spend) ─────────────────────────────────
     cat_rows = (await db.execute(
         select(Transaction.category, func.sum(Transaction.amount).label("total"))
-        .where(Transaction.direction == "debit", Transaction.category.isnot(None), *main_where)
+        .where(Transaction.direction == "debit", Transaction.category.isnot(None),
+               *main_where, *reimb)
         .group_by(Transaction.category)
         .order_by(func.sum(Transaction.amount).desc())
         .limit(10)
@@ -137,6 +148,7 @@ async def build_aggregated_context(
             Transaction.direction == "debit",
             Transaction.need_want_savings.isnot(None),
             *main_where,
+            *reimb,
         )
         .group_by(Transaction.need_want_savings)
     )).all()
@@ -149,7 +161,7 @@ async def build_aggregated_context(
             func.extract("month", Transaction.date).label("mo"),
             func.sum(Transaction.amount).label("total"),
         )
-        .where(Transaction.direction == "debit", *main_where)
+        .where(Transaction.direction == "debit", *main_where, *reimb)
         .group_by("yr", "mo")
         .order_by("yr", "mo")
     )
@@ -167,12 +179,13 @@ async def build_aggregated_context(
         "total_spending": round(expenses, 2),
         "total_income": round(income, 2),
         "net": round(income - expenses, 2),
-        "savings_rate_pct": round((income - expenses) / income * 100, 1) if income else 0,
+        "savings_rate_pct": round((income - expenses) / income * 100, 1) if income else None,
         "prev_period_spending": round(prev_exp, 2),
         "period_change_pct": round((expenses - prev_exp) / prev_exp * 100, 1) if prev_exp else None,
         "category_breakdown": categories,
         "need_want_savings": nws,
         "monthly_trend": trend,
+        "exclude_reimbursable": exclude_reimbursable,
     }
 
 
@@ -184,12 +197,14 @@ async def query_insights(
     year: Optional[int] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    exclude_reimbursable: bool = False,
 ) -> dict:
     """Answer a natural language question with aggregated context only."""
     if not provider:
         raise ValueError("No AI provider configured. Add an API key in Settings → AI Configuration.")
     context = await build_aggregated_context(
-        db, month=month, year=year, date_from=date_from, date_to=date_to
+        db, month=month, year=year, date_from=date_from, date_to=date_to,
+        exclude_reimbursable=exclude_reimbursable,
     )
     result = await provider.query(question, context)
     return {"answer": result.answer, "context_snapshot": context}
@@ -201,6 +216,7 @@ async def build_advisor_context(
     year: Optional[int] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    exclude_reimbursable: bool = False,
 ) -> dict:
     """
     Richer aggregated context for the financial advisor.
@@ -208,7 +224,8 @@ async def build_advisor_context(
     NEVER includes raw transactions, merchant names, or PII.
     """
     base = await build_aggregated_context(
-        db, month=month, year=year, date_from=date_from, date_to=date_to
+        db, month=month, year=year, date_from=date_from, date_to=date_to,
+        exclude_reimbursable=exclude_reimbursable,
     )
 
     df_str = base.get("date_from")
@@ -216,11 +233,11 @@ async def build_advisor_context(
 
     # Budget adherence — query all budget months within the range
     budget_query = select(Budget)
+    covered: set = set()
     if df_str and dt_str:
         df_d = date.fromisoformat(df_str)
         dt_d = date.fromisoformat(dt_str)
         # Collect (month, year) pairs covered by the range
-        covered = set()
         cur = date(df_d.year, df_d.month, 1)
         while cur <= dt_d:
             covered.add((cur.month, cur.year))
@@ -238,16 +255,33 @@ async def build_advisor_context(
             budget_query = budget_query.where(or_(*month_filters))
 
     budget_rows = (await db.execute(budget_query)).scalars().all()
+
+    # Accumulate budget totals across all covered months, then divide by the
+    # number of months to get a per-month average.  This makes the adherence
+    # numbers directly comparable to single-month averages for any range length
+    # and avoids the situation where a 3-month range shows 3× the monthly budget
+    # as the "budget" ceiling.
+    # M-16: Average only over months that actually have budget rows, not all
+    # calendar months in the range. If the user only set budgets for 2 of 6
+    # months, dividing by 6 would under-state the per-month budget average
+    # and make the advisor think the user is chronically over-budget.
+    months_with_budgets = len({(b.month, b.year) for b in budget_rows})
+    num_months = max(months_with_budgets, 1)
     budget_map: dict[str, float] = {}
     for b in budget_rows:
         budget_map[b.category] = budget_map.get(b.category, 0) + float(b.budget_amount)
+    # Convert accumulated totals → per-month averages
+    budget_map = {cat: amt / num_months for cat, amt in budget_map.items()}
 
+    # Also use per-month averages for the actual spending so the comparison is
+    # on the same scale regardless of how many months the range spans.
     total_budgeted = sum(budget_map.values())
     adherence = []
     for cat in base["category_breakdown"]:
         cat_name = cat["category"]
         budgeted = budget_map.get(cat_name)
-        actual = cat["total"]
+        # Use per-month average actual to match the per-month budget
+        actual = round(cat["total"] / num_months, 2)
         if budgeted:
             adherence.append({
                 "category": cat_name,
@@ -265,7 +299,8 @@ async def build_advisor_context(
 
     return {
         **base,
-        "total_budgeted": round(total_budgeted, 2),
+        "period_months": num_months,
+        "total_budgeted_monthly_avg": round(total_budgeted, 2),
         "budget_adherence_by_category": adherence,
         "unbudgeted_categories": unbudgeted,
         "over_budget_count": sum(1 for a in adherence if a["over_budget"]),
@@ -317,13 +352,15 @@ async def generate_financial_advice(
     year: Optional[int] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    exclude_reimbursable: bool = False,
 ) -> dict:
     """Generate proactive financial strategy advice using aggregated data only."""
     if not provider:
         raise ValueError("No AI provider configured. Add an API key in Settings → AI Configuration.")
 
     context = await build_advisor_context(
-        db, month=month, year=year, date_from=date_from, date_to=date_to
+        db, month=month, year=year, date_from=date_from, date_to=date_to,
+        exclude_reimbursable=exclude_reimbursable,
     )
     context_json = json.dumps(context, indent=2)
 

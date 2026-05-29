@@ -71,9 +71,9 @@ def _tx_row(t: Transaction, acct_map: dict) -> dict:
         "category":               t.category or "",
         "subcategory":            t.subcategory or "",
         "account":                acct_map.get(str(t.account_id), "") if t.account_id else "",
-        "need_want":              t.need_want_savings or "",
-        "fixed_var":              t.fixed_variable or "",
-        "personal_work":          t.personal_work_shared or "",
+        "need_want_savings":      t.need_want_savings or "",
+        "fixed_variable":         t.fixed_variable or "",
+        "personal_work_shared":   t.personal_work_shared or "",
         "notes":                  t.notes or "",
         "tags":                   ",".join(t.tags or []),
         "is_reimbursable":        t.is_reimbursable,
@@ -89,8 +89,8 @@ def _tx_row(t: Transaction, acct_map: dict) -> dict:
 
 CSV_FIELDS = [
     "id", "date", "merchant", "description", "amount", "direction",
-    "category", "subcategory", "account", "need_want", "fixed_var",
-    "personal_work", "notes", "tags", "is_reimbursable",
+    "category", "subcategory", "account", "need_want_savings", "fixed_variable",
+    "personal_work_shared", "notes", "tags", "is_reimbursable",
     "reimbursement_status", "expected_reimbursement", "received_reimbursement",
     "net_personal_cost", "is_recurring", "source", "needs_review",
 ]
@@ -251,7 +251,7 @@ async def export_excel(
     ws.title = "Transactions"
     _xl_header(ws, [
         "Date", "Merchant", "Amount", "Direction", "Category", "Subcategory",
-        "Account", "Need/Want", "Fixed/Var", "Personal/Work",
+        "Account", "Need/Want/Savings", "Fixed/Variable", "Personal/Work/Shared",
         "Notes", "Reimbursable", "Net Cost", "Recurring", "Tags",
     ])
     ws.freeze_panes = "A2"

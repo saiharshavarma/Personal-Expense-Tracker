@@ -1,11 +1,14 @@
 import base64
 import json
 import logging
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from pydantic import BaseModel
@@ -20,6 +23,39 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+# ── Login rate limiter (in-memory, per client IP) ─────────────────────────────
+_login_attempts: defaultdict[str, list[float]] = defaultdict(list)
+_MAX_LOGIN_ATTEMPTS = 10
+_LOGIN_WINDOW_S = 300  # 5-minute sliding window
+
+
+def _check_rate_limit(ip: str) -> None:
+    now = time.time()
+    # Prune attempts outside the window
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW_S]
+    if len(_login_attempts[ip]) >= _MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts. Try again in {_LOGIN_WINDOW_S // 60} minutes.",
+        )
+    _login_attempts[ip].append(now)
+
+
+def _reset_rate_limit(ip: str) -> None:
+    """Clear the counter for an IP on successful login."""
+    _login_attempts.pop(ip, None)
+
+
+# ── WebAuthn helpers ──────────────────────────────────────────────────────────
+
+def _webauthn_rp_id() -> str:
+    """
+    Derive the WebAuthn relying party ID from the configured webauthn_origin.
+    rp_id must be the effective domain (no scheme, no port) per the spec.
+    """
+    return urlparse(settings.webauthn_origin).hostname or "localhost"
 
 
 def _hash_password(password: str) -> str:
@@ -127,13 +163,17 @@ async def setup(body: SetupRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login")
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
+
     prefs = await get_prefs(db)
     if not prefs.onboarding_complete or not prefs.password_hash:
         raise HTTPException(status_code=400, detail="Setup required first")
     if not _verify_password(body.password, prefs.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect password")
 
+    _reset_rate_limit(client_ip)
     token = create_access_token({"sub": "local-user", "type": "password"})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -149,8 +189,8 @@ async def change_password(
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if body.new_password != body.confirm_new_password:
         raise HTTPException(status_code=400, detail="New passwords do not match")
-    if len(body.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.new_password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
 
     prefs.password_hash = _hash_password(body.new_password)
     await db.commit()
@@ -196,7 +236,7 @@ async def webauthn_register_begin(
         raise HTTPException(status_code=500, detail="WebAuthn library not available")
 
     options = generate_registration_options(
-        rp_id="localhost",
+        rp_id=_webauthn_rp_id(),
         rp_name="Finance Dashboard",
         user_id=b"local-user-1",
         user_name="finance_user",
@@ -257,7 +297,7 @@ async def webauthn_register_finish(
         verification = verify_registration_response(
             credential=reg_credential,
             expected_challenge=challenge_bytes,
-            expected_rp_id="localhost",
+            expected_rp_id=_webauthn_rp_id(),
             expected_origin=settings.webauthn_origin,
             require_user_verification=True,
         )
@@ -299,7 +339,7 @@ async def webauthn_authenticate_begin(db: AsyncSession = Depends(get_db)):
     cred_id_bytes = base64.urlsafe_b64decode(cred_id_b64)
 
     options = generate_authentication_options(
-        rp_id="localhost",
+        rp_id=_webauthn_rp_id(),
         user_verification=UserVerificationRequirement.REQUIRED,
         allow_credentials=[PublicKeyCredentialDescriptor(id=cred_id_bytes)],
     )
@@ -359,7 +399,7 @@ async def webauthn_authenticate_finish(
         verification = verify_authentication_response(
             credential=auth_credential,
             expected_challenge=challenge_bytes,
-            expected_rp_id="localhost",
+            expected_rp_id=_webauthn_rp_id(),
             expected_origin=settings.webauthn_origin,
             credential_public_key=pub_key_bytes,
             credential_current_sign_count=sign_count,

@@ -2,7 +2,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
 import { useUIStore } from '@/store'
 import { Sidebar } from './Sidebar'
-import { Mascot } from '@/components/Mascot'
 
 interface MainLayoutProps {
   children: React.ReactNode
@@ -39,7 +38,6 @@ export function MainLayout({ children }: MainLayoutProps) {
           </motion.div>
         </AnimatePresence>
       </motion.main>
-      <Mascot />
     </div>
   )
 }

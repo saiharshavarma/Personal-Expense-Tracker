@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Receipt, Plus, Clock, CheckCircle, DollarSign,
@@ -26,33 +27,37 @@ interface PipelineItem {
   reimbursement_source: string | null
   category: string | null
   days_outstanding: number
+  // M-7: paid_date is the reimbursement_received_date — more accurate than
+  // days_outstanding (which is computed from the original transaction date) for
+  // deciding whether a paid item belongs in the kanban vs settled history.
+  paid_date: string | null
 }
 
-type ColId = 'to_submit' | 'submitted' | 'approved' | 'paid' | 'rejected'
+type ColId = 'to_submit' | 'submitted' | 'approved' | 'paid' | 'partial' | 'rejected'
 
 interface Pipeline {
   to_submit: PipelineItem[]
   submitted: PipelineItem[]
   approved: PipelineItem[]
   paid: PipelineItem[]
+  partial: PipelineItem[]
   rejected: PipelineItem[]
 }
 
 const COLUMNS: { id: ColId; label: string; icon: React.ElementType; color: string; headerColor: string }[] = [
-  { id: 'to_submit',  label: 'To Submit',  icon: Clock,         color: 'text-yellow-500', headerColor: 'border-yellow-500/30 bg-yellow-500/5' },
-  { id: 'submitted',  label: 'Submitted',  icon: ArrowRight,    color: 'text-blue-500',   headerColor: 'border-blue-500/30 bg-blue-500/5' },
-  { id: 'approved',   label: 'Approved',   icon: CheckCircle,   color: 'text-green-500',  headerColor: 'border-green-500/30 bg-green-500/5' },
-  { id: 'paid',       label: 'Paid',       icon: DollarSign,    color: 'text-emerald-500',headerColor: 'border-emerald-500/30 bg-emerald-500/5' },
-  { id: 'rejected',   label: 'Rejected',   icon: XCircle,       color: 'text-red-500',    headerColor: 'border-red-500/30 bg-red-500/5' },
+  { id: 'to_submit',  label: 'To Submit',  icon: Clock,         color: 'text-yellow-500',  headerColor: 'border-yellow-500/30 bg-yellow-500/5'  },
+  { id: 'submitted',  label: 'Submitted',  icon: ArrowRight,    color: 'text-blue-500',    headerColor: 'border-blue-500/30 bg-blue-500/5'      },
+  { id: 'approved',   label: 'Approved',   icon: CheckCircle,   color: 'text-green-500',   headerColor: 'border-green-500/30 bg-green-500/5'    },
+  { id: 'partial',    label: 'Partial',    icon: Layers,        color: 'text-orange-500',  headerColor: 'border-orange-500/30 bg-orange-500/5'  },
+  { id: 'paid',       label: 'Paid',       icon: DollarSign,    color: 'text-emerald-500', headerColor: 'border-emerald-500/30 bg-emerald-500/5'},
+  { id: 'rejected',   label: 'Rejected',   icon: XCircle,       color: 'text-red-500',     headerColor: 'border-red-500/30 bg-red-500/5'        },
 ]
 
 const EMPTY_PIPELINE: Pipeline = {
-  to_submit: [], submitted: [], approved: [], paid: [], rejected: [],
+  to_submit: [], submitted: [], approved: [], paid: [], partial: [], rejected: [],
 }
 
-// ── Drag state (ref-based, no re-renders during drag) ─────────────────────────
-let dragId = ''
-let dragFromCol: ColId = 'to_submit'
+// ── Drag state lives in refs inside the component (see L-3 fix) ──────────────
 
 // ── Kanban card ───────────────────────────────────────────────────────────────
 
@@ -104,6 +109,12 @@ function BatchDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [source, setSource] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  // L-4: Reset selected items each time the dialog opens so stale selections
+  // from a previous open don't pre-check unrelated transactions.
+  useEffect(() => {
+    if (open) setSelected(new Set())
+  }, [open])
 
   const toggleAll = () => {
     if (selected.size === toSubmit.length) setSelected(new Set())
@@ -204,12 +215,18 @@ export function Reimbursements() {
   const [dragOver, setDragOver] = useState<ColId | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
 
+  // L-3: Module-level `let` variables were shared across component instances
+  // and survived hot reloads with stale state. Move to refs so each component
+  // instance owns its own drag state without triggering re-renders.
+  const dragIdRef = useRef('')
+  const dragFromColRef = useRef<ColId>('to_submit')
+
   const fetchPipeline = async () => {
     try {
       const res = await api.get('/reimbursements/pipeline')
       setPipeline(res.data)
     } catch {
-      // fail silently
+      toast.error('Failed to load reimbursements.')
     } finally {
       setLoading(false)
     }
@@ -218,16 +235,16 @@ export function Reimbursements() {
   useEffect(() => { fetchPipeline() }, [])
 
   const handleDragStart = (id: string, col: ColId) => {
-    dragId = id
-    dragFromCol = col
+    dragIdRef.current = id
+    dragFromColRef.current = col
   }
 
   const handleDrop = async (toCol: ColId) => {
     setDragOver(null)
-    if (!dragId || dragFromCol === toCol) return
-    const id = dragId
-    const fromCol = dragFromCol
-    dragId = ''
+    if (!dragIdRef.current || dragFromColRef.current === toCol) return
+    const id = dragIdRef.current
+    const fromCol = dragFromColRef.current
+    dragIdRef.current = ''
 
     // Optimistic update
     setPipeline((prev) => {
@@ -247,27 +264,41 @@ export function Reimbursements() {
     }
   }
 
-  // Split paid/rejected into recent (kanban) and settled history
-  const recentPaid = pipeline.paid.filter((i) => i.days_outstanding <= HISTORY_THRESHOLD_DAYS)
-  const recentRejected = pipeline.rejected.filter((i) => i.days_outstanding <= HISTORY_THRESHOLD_DAYS)
+  // Split paid/rejected into recent (kanban) and settled history.
+  // M-7: Use paid_date (reimbursement received date) rather than days_outstanding
+  // (original transaction date) to determine recency for paid items. A transaction
+  // from 6 months ago that was paid yesterday should stay in the active kanban.
+  const _msThreshold = HISTORY_THRESHOLD_DAYS * 86400000
+  const _isRecent = (refDate: string | null, fallbackDaysOutstanding: number) => {
+    if (refDate) {
+      return Date.now() - new Date(refDate + 'T00:00:00').getTime() <= _msThreshold
+    }
+    return fallbackDaysOutstanding <= HISTORY_THRESHOLD_DAYS
+  }
+  const recentPaid     = pipeline.paid.filter((i)     => _isRecent(i.paid_date, i.days_outstanding))
+  const recentRejected = pipeline.rejected.filter((i) => _isRecent(null, i.days_outstanding))
   const historyItems: (PipelineItem & { settled_as: 'paid' | 'rejected' })[] = [
-    ...pipeline.paid.filter((i) => i.days_outstanding > HISTORY_THRESHOLD_DAYS).map((i) => ({ ...i, settled_as: 'paid' as const })),
-    ...pipeline.rejected.filter((i) => i.days_outstanding > HISTORY_THRESHOLD_DAYS).map((i) => ({ ...i, settled_as: 'rejected' as const })),
+    ...pipeline.paid.filter((i)     => !_isRecent(i.paid_date, i.days_outstanding)).map((i) => ({ ...i, settled_as: 'paid'     as const })),
+    ...pipeline.rejected.filter((i) => !_isRecent(null, i.days_outstanding)).map((i)         => ({ ...i, settled_as: 'rejected' as const })),
   ].sort((a, b) => b.days_outstanding - a.days_outstanding)
 
   const activePipeline: Pipeline = { ...pipeline, paid: recentPaid, rejected: recentRejected }
 
   // Summary computed from pipeline
-  const pendingAmt = [...pipeline.to_submit].reduce((s, i) => s + i.expected_reimbursement, 0)
+  const pendingAmt   = pipeline.to_submit.reduce((s, i) => s + i.expected_reimbursement, 0)
   const submittedAmt = pipeline.submitted.reduce((s, i) => s + i.expected_reimbursement, 0)
-  const approvedAmt = pipeline.approved.reduce((s, i) => s + i.expected_reimbursement, 0)
-  const paidAmt = pipeline.paid.reduce((s, i) => s + i.expected_reimbursement, 0)
+  const approvedAmt  = pipeline.approved.reduce((s, i) => s + i.expected_reimbursement, 0)
+  const partialAmt   = pipeline.partial.reduce((s, i) => s + i.expected_reimbursement, 0)
+  // M-8: Use recentPaid (the kanban slice) rather than pipeline.paid (all paid ever)
+  // so the "Paid" summary card reflects only what's currently visible in the board.
+  const paidAmt = recentPaid.reduce((s, i) => s + i.expected_reimbursement, 0)
 
   const SUMMARY = [
-    { label: 'To Submit',  amount: pendingAmt,   count: pipeline.to_submit.length,  color: 'text-yellow-500' },
-    { label: 'Submitted',  amount: submittedAmt,  count: pipeline.submitted.length,  color: 'text-blue-500' },
-    { label: 'Approved',   amount: approvedAmt,   count: pipeline.approved.length,   color: 'text-green-500' },
-    { label: 'Received',   amount: paidAmt,       count: pipeline.paid.length,       color: 'text-emerald-500' },
+    { label: 'To Submit',  amount: pendingAmt,   count: pipeline.to_submit.length,  color: 'text-yellow-500'  },
+    { label: 'Submitted',  amount: submittedAmt,  count: pipeline.submitted.length,  color: 'text-blue-500'    },
+    { label: 'Approved',   amount: approvedAmt,   count: pipeline.approved.length,   color: 'text-green-500'   },
+    { label: 'Partial',    amount: partialAmt,    count: pipeline.partial.length,    color: 'text-orange-500'  },
+    { label: 'Paid',       amount: paidAmt,       count: recentPaid.length,          color: 'text-emerald-500' },
   ]
 
   return (
@@ -288,7 +319,7 @@ export function Reimbursements() {
       />
 
       {/* Summary row */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         {SUMMARY.map(({ label, amount, count, color }, i) => (
           <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
             <Card>
@@ -308,7 +339,7 @@ export function Reimbursements() {
       </div>
 
       {/* Kanban board */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-6 gap-3">
         {COLUMNS.map(({ id, label, icon: Icon, color, headerColor }, ci) => {
           const items = activePipeline[id]
           const isDragTarget = dragOver === id

@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   TrendingUp, TrendingDown, DollarSign,
   CreditCard, RefreshCw, AlertCircle, ArrowUpRight, ArrowDownRight,
-  Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target,
+  Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target, Eye, EyeOff,
 } from 'lucide-react'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
 import {
@@ -18,9 +18,12 @@ import { Badge } from '@/components/ui/badge'
 import { api } from '@/utils/apiClient'
 import { cn, formatCurrency, formatDate, getCurrentMonthYear, monthName } from '@/lib/utils'
 import { getCategoryColor } from '@/lib/categories'
+import { useUIStore } from '@/store/ui'
 import type { Transaction } from '@/types'
 
-const { month: currentMonth, year: currentYear } = getCurrentMonthYear()
+// L-1: Do NOT evaluate getCurrentMonthYear() at module load time — the result
+// would be frozen at import and become stale if the module is cached across a
+// midnight boundary. Use the lazy-initializer form of useState instead.
 
 // ── Getting-started guide (Phase 14) ─────────────────────────────────────────
 
@@ -107,7 +110,7 @@ const CHART_COLORS = [
 
 interface DashboardSummary {
   month: number; year: number
-  expenses: number; income: number; savings: number; savings_rate: number
+  expenses: number; income: number; savings: number; savings_rate: number | null
   transaction_count: number
   top_category: string | null; top_category_total: number
   mom_change_pct: number; prev_month_expenses: number
@@ -172,6 +175,7 @@ interface ProjectionData {
   days_elapsed: number
   days_remaining: number
   days_in_month: number
+  projection_reliable: boolean
 }
 
 function ProjectionWidget({ month, year }: { month: number; year: number }) {
@@ -202,6 +206,7 @@ function ProjectionWidget({ month, year }: { month: number; year: number }) {
             <Skeleton className="h-2.5 w-20" />
           </div>
         ) : data ? (
+          data.projection_reliable ? (
           <>
             <p className="text-xl font-bold">{formatCurrency(data.projected_total)}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -222,6 +227,17 @@ function ProjectionWidget({ month, year }: { month: number; year: number }) {
               ~{formatCurrency(data.avg_daily_spend)}/day avg
             </p>
           </>
+          ) : (
+          <>
+            <p className="text-xl font-bold text-muted-foreground">—</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {formatCurrency(data.spent_so_far)} spent so far
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Check back after day 3 for a reliable projection
+            </p>
+          </>
+          )
         ) : (
           <p className="text-sm text-muted-foreground">—</p>
         )}
@@ -242,17 +258,17 @@ interface HealthScoreData {
   review_completion_pct: number
 }
 
-function HealthScoreWidget({ month, year }: { month: number; year: number }) {
+function HealthScoreWidget({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<HealthScoreData | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/health-score?month=${month}&year=${year}`)
+    api.get(`/analytics/health-score?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   const scoreColor = (score: number) =>
     score >= 80 ? 'text-green-500' : score >= 55 ? 'text-amber-500' : 'text-red-500'
@@ -319,17 +335,19 @@ interface SpendVelocityData {
   month_total: number
 }
 
-function SpendVelocityWidget() {
+// M-1: Accept month/year so the widget reflects the selected month rather than
+// always showing the current month when the user browses historical data.
+function SpendVelocityWidget({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<SpendVelocityData | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get('/analytics/spend-velocity')
+    api.get(`/analytics/spend-velocity?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [])
+  }, [month, year, excludeReimbursable])
 
   const isAccelerating = (data?.pct_change ?? 0) > 5
   const isDecelerating = (data?.pct_change ?? 0) < -5
@@ -389,17 +407,17 @@ const DASH_GRID     = 'hsl(var(--border))'
 
 // ── Category bar chart ───────────────────────────────────────────────────────
 
-function CategoryBarChart({ month, year }: { month: number; year: number }) {
+function CategoryBarChart({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<CategoryItem[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/category-breakdown?month=${month}&year=${year}`)
+    api.get(`/analytics/category-breakdown?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.slice(0, 7)))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="h-48 w-full" />
   if (!data.length) return (
@@ -413,7 +431,7 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
       <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={DASH_GRID} strokeOpacity={0.4} />
         <XAxis type="number" tick={DASH_TICK_SM} tickLine={false} axisLine={false}
-          tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
+          tickFormatter={(v) => formatCurrency(v)} />
         <YAxis dataKey="category" type="category" tick={DASH_TICK_SM} tickLine={false} axisLine={false} width={100} />
         <Tooltip
           formatter={(v: number) => [formatCurrency(v), 'Spend']}
@@ -430,7 +448,8 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
 
 // ── Recent transactions ──────────────────────────────────────────────────────
 
-function RecentTransactions({ month, year }: { month: number; year: number }) {
+// M-2: Accept excludeReimbursable so the list stays consistent with the toggle.
+function RecentTransactions({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [txns, setTxns] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -440,11 +459,18 @@ function RecentTransactions({ month, year }: { month: number; year: number }) {
     const dateFrom = `${year}-${String(month).padStart(2, '0')}-01`
     const lastDay = new Date(year, month, 0).getDate()
     const dateTo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-    api.get('/transactions', { params: { date_from: dateFrom, date_to: dateTo, page_size: 6, sort_by: 'date', sort_dir: 'desc' } })
+    const params: Record<string, string | number | boolean> = {
+      date_from: dateFrom, date_to: dateTo,
+      page_size: 6, sort_by: 'date', sort_dir: 'desc',
+    }
+    // M-2: Filter out reimbursable transactions when the toggle is active so
+    // the list matches what the KPI cards are showing.
+    if (excludeReimbursable) params.is_reimbursable = false
+    api.get('/transactions', { params })
       .then(r => setTxns(r.data.items ?? []))
       .catch(() => setTxns([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return (
     <div className="space-y-2">
@@ -498,18 +524,21 @@ function RecentTransactions({ month, year }: { month: number; year: number }) {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export function Dashboard() {
-  const [month, setMonth] = useState(currentMonth)
-  const [year, setYear] = useState(currentYear)
+  // L-1: Lazy initializer so the value is captured at first render, not at
+  // module load time (which would freeze to the import-time date/month).
+  const [month, setMonth] = useState(() => getCurrentMonthYear().month)
+  const [year, setYear] = useState(() => getCurrentMonthYear().year)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
+  const { excludeReimbursable, toggleExcludeReimbursable } = useUIStore()
 
   useEffect(() => {
     setSummaryLoading(true)
-    api.get(`/analytics/dashboard-summary?month=${month}&year=${year}`)
+    api.get(`/analytics/dashboard-summary?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setSummary(r.data))
       .catch(() => setSummary(null))
       .finally(() => setSummaryLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   const savingsSign = summary ? (summary.savings >= 0 ? '+' : '') : ''
 
@@ -521,11 +550,26 @@ export function Dashboard() {
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">Your financial overview at a glance</p>
         </div>
-        <MonthYearPicker
-          month={month}
-          year={year}
-          onChange={(m, y) => { setMonth(m); setYear(y) }}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant={excludeReimbursable ? 'default' : 'outline'}
+            size="sm"
+            onClick={toggleExcludeReimbursable}
+            className={cn(
+              'h-8 px-3 text-xs gap-1.5',
+              excludeReimbursable && 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500',
+            )}
+            title={excludeReimbursable ? 'Reimbursable transactions excluded — click to show all' : 'Click to exclude reimbursable transactions from totals'}
+          >
+            {excludeReimbursable ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {excludeReimbursable ? 'Excl. Reimbursable' : 'Show All'}
+          </Button>
+          <MonthYearPicker
+            month={month}
+            year={year}
+            onChange={(m, y) => { setMonth(m); setYear(y) }}
+          />
+        </div>
       </div>
 
       {/* ── KPI row ── */}
@@ -560,7 +604,7 @@ export function Dashboard() {
             <StatCard
               title="Savings"
               value={`${savingsSign}${formatCurrency(summary.savings)}`}
-              sub={`${summary.savings_rate}% savings rate`}
+              sub={summary.savings_rate != null ? `${summary.savings_rate}% savings rate` : 'No income recorded'}
               icon={summary.savings >= 0 ? TrendingUp : TrendingDown}
               iconColor={summary.savings >= 0 ? 'text-green-500' : 'text-red-500'}
               delay={0.08}
@@ -591,7 +635,7 @@ export function Dashboard() {
               <p className="text-xs text-muted-foreground">{monthName(month)} {year}</p>
             </CardHeader>
             <CardContent className="pb-4 px-5">
-              <CategoryBarChart month={month} year={year} />
+              <CategoryBarChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </CardContent>
           </Card>
         </motion.div>
@@ -666,8 +710,8 @@ export function Dashboard() {
         transition={{ delay: 0.22 }}
       >
         <ProjectionWidget month={month} year={year} />
-        <HealthScoreWidget month={month} year={year} />
-        <SpendVelocityWidget />
+        <HealthScoreWidget month={month} year={year} excludeReimbursable={excludeReimbursable} />
+        <SpendVelocityWidget month={month} year={year} excludeReimbursable={excludeReimbursable} />
       </motion.div>
 
       {/* ── Getting started (shown when no transactions yet) ── */}
@@ -684,7 +728,7 @@ export function Dashboard() {
             <p className="text-xs text-muted-foreground">{monthName(month)} {year}</p>
           </CardHeader>
           <CardContent className="pb-4 px-5">
-            <RecentTransactions month={month} year={year} />
+            <RecentTransactions month={month} year={year} excludeReimbursable={excludeReimbursable} />
           </CardContent>
         </Card>
       </motion.div>

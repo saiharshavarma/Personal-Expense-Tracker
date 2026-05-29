@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plane, Plus, MapPin, Calendar, DollarSign,
@@ -25,7 +26,8 @@ import type { Trip } from '@/types'
 interface TripExpense {
   id: string
   date: string
-  amount: number
+  amount: number      // gross transaction amount
+  net_amount: number  // net personal cost (gross minus received reimbursement)
   merchant: string | null
   category: string | null
 }
@@ -223,7 +225,12 @@ function TripDetailSheet({
     if (!trip) return
     setCandidatesLoading(true)
     try {
-      const params: Record<string, string | number> = { page_size: 200, sort_by: 'date', sort_dir: 'desc' }
+      const params: Record<string, string | number> = {
+        page_size: 200, sort_by: 'date', sort_dir: 'desc',
+        // M-9: Only show debit transactions — credits (refunds) are not trip
+        // expenses and should never appear in the tagging candidate list.
+        direction: 'debit',
+      }
       if (trip.start_date) params.date_from = trip.start_date
       if (trip.end_date) params.date_to = trip.end_date
       const r = await api.get('/transactions', { params })
@@ -233,6 +240,7 @@ function TripDetailSheet({
   }
 
   useEffect(() => {
+    setAutoTagMsg(null) // L-11: clear stale auto-tag message when switching trips
     if (!trip) { setDetail(null); setCandidates([]); setSelected(new Set()); setTab('expenses'); setTagSearch(''); return }
     loadExpenses()
   }, [trip?.id])
@@ -301,10 +309,12 @@ function TripDetailSheet({
 
   const statusMeta = STATUS_PILL[trip ? effectiveStatus(trip) : 'planning']
 
+  // Use net_amount (personal cost after reimbursements) so category bars match
+  // the net total_spent figure shown in the header rather than the gross amounts.
   const catMap: Record<string, number> = {}
   detail?.expenses.forEach((e) => {
     const cat = e.category ?? 'Uncategorized'
-    catMap[cat] = (catMap[cat] ?? 0) + e.amount
+    catMap[cat] = (catMap[cat] ?? 0) + (e.net_amount ?? e.amount)
   })
   const catRows = Object.entries(catMap).sort((a, b) => b[1] - a[1])
   const maxCat = Math.max(...catRows.map((r) => r[1]), 1)
@@ -511,7 +521,9 @@ function TripDetailSheet({
                             <p className="truncate font-medium text-sm">{e.merchant ?? '—'}</p>
                             {e.category && <p className="text-xs text-muted-foreground">{e.category}</p>}
                           </div>
-                          <span className="font-semibold tabular-nums flex-shrink-0 text-sm">{formatCurrency(e.amount)}</span>
+                          <span className="font-semibold tabular-nums flex-shrink-0 text-sm" title={e.net_amount !== e.amount ? `Gross: ${formatCurrency(e.amount)}` : undefined}>
+                            {formatCurrency(e.net_amount ?? e.amount)}
+                          </span>
                           <button
                             onClick={() => handleUntag(e.id)}
                             title="Remove from trip"
@@ -748,6 +760,8 @@ export function Trips() {
     try {
       const res = await api.get('/trips')
       setTrips(res.data)
+    } catch {
+      toast.error('Failed to load trips.')
     } finally {
       setLoading(false)
     }
@@ -756,10 +770,14 @@ export function Trips() {
   useEffect(() => { fetchTrips() }, [])
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this trip?')) return
-    await api.delete(`/trips/${id}`)
-    fetchTrips()
-    if (selectedTrip?.id === id) setSelectedTrip(null)
+    if (!confirm('Delete this trip? This cannot be undone.')) return
+    try {
+      await api.delete(`/trips/${id}`)
+      fetchTrips()
+      if (selectedTrip?.id === id) setSelectedTrip(null)
+    } catch {
+      toast.error('Failed to delete trip.')
+    }
   }
 
   const handleEdit = (trip: Trip) => {

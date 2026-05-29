@@ -14,6 +14,8 @@ interface UIStore {
   // Badge counts shown in the sidebar
   needsReviewCount: number
   importQueueCount: number
+  // Toggle: exclude reimbursable transactions from financial analytics
+  excludeReimbursable: boolean
 
   toggleTheme: () => void
   setTheme: (theme: 'light' | 'dark') => void
@@ -21,6 +23,7 @@ interface UIStore {
   addNotification: (n: Omit<Notification, 'id'>) => void
   removeNotification: (id: string) => void
   setBadgeCounts: (counts: { needsReviewCount?: number; importQueueCount?: number }) => void
+  toggleExcludeReimbursable: () => void
 }
 
 function getStoredTheme(): 'light' | 'dark' {
@@ -28,6 +31,11 @@ function getStoredTheme(): 'light' | 'dark' {
   const stored = localStorage.getItem('theme') as 'light' | 'dark' | null
   if (stored) return stored
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function getStoredExcludeReimbursable(): boolean {
+  if (typeof window === 'undefined') return false
+  return localStorage.getItem('excludeReimbursable') === 'true'
 }
 
 function applyTheme(theme: 'light' | 'dark') {
@@ -45,6 +53,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   notifications: [],
   needsReviewCount: 0,
   importQueueCount: 0,
+  excludeReimbursable: getStoredExcludeReimbursable(),
 
   toggleTheme: () => {
     const next = get().theme === 'light' ? 'dark' : 'light'
@@ -72,6 +81,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
     needsReviewCount: counts.needsReviewCount ?? s.needsReviewCount,
     importQueueCount: counts.importQueueCount ?? s.importQueueCount,
   })),
+
+  toggleExcludeReimbursable: () => set((s) => {
+    const next = !s.excludeReimbursable
+    localStorage.setItem('excludeReimbursable', String(next))
+    return { excludeReimbursable: next }
+  }),
 }))
 
 // Apply theme on module load

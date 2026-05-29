@@ -104,7 +104,10 @@ def _serialize(t: Transaction) -> dict:
         "source": t.source,
         "ai_category": t.ai_category,
         "ai_subcategory": t.ai_subcategory,
-        "ai_confidence": float(t.ai_confidence) if t.ai_confidence else None,
+        # H-13: Use `is not None` so confidence=0.0 is serialized as 0.0, not None.
+        # A None would make the frontend treat zero-confidence AI results as "not run"
+        # rather than "ran and has no idea", which breaks review-queue colour coding.
+        "ai_confidence": float(t.ai_confidence) if t.ai_confidence is not None else None,
         "ai_flags": t.ai_flags or [],
         "ai_reviewed": t.ai_reviewed,
         "needs_review": t.needs_review,
@@ -185,7 +188,12 @@ async def list_transactions(
     if filters:
         q = q.where(and_(*filters))
 
-    sort_col = getattr(Transaction, sort_by, Transaction.date)
+    _SORTABLE = {
+        "date", "posted_date", "amount", "description", "merchant",
+        "category", "subcategory", "direction", "is_recurring",
+        "needs_review", "created_at", "updated_at",
+    }
+    sort_col = getattr(Transaction, sort_by if sort_by in _SORTABLE else "date")
     q = q.order_by(sort_col.desc() if sort_dir == "desc" else sort_col.asc())
 
     total_result = await db.execute(select(func.count()).select_from(q.subquery()))
@@ -275,7 +283,9 @@ async def create_transaction(
     from services.dedup import compute_duplicate_hash
     data = body.model_dump()
     if data.get("description"):
-        data["duplicate_hash"] = compute_duplicate_hash(data["date"], data["amount"], data["description"])
+        data["duplicate_hash"] = compute_duplicate_hash(
+            data["date"], data["amount"], data["description"], data.get("direction", "")
+        )
 
     t = Transaction(**{k: v for k, v in data.items() if hasattr(Transaction, k)})
     db.add(t)
@@ -345,7 +355,10 @@ async def update_transaction(
             )
             await db.commit()
         except Exception:
-            pass  # Learning failure should never break the save
+            # H-6: Roll back the pending learning write so the session is clean.
+            # Without this, subsequent queries in the same session may see or
+            # propagate the failed write, causing confusing integrity errors.
+            await db.rollback()
 
     return _serialize(t)
 
@@ -369,6 +382,14 @@ async def bulk_action(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # H-7: Validate action early so callers get a clear 400 rather than a silent no-op.
+    _VALID_ACTIONS = {"delete", "categorize", "mark_reimbursable", "tag", "update"}
+    if body.action not in _VALID_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown bulk action {body.action!r}. Must be one of: {sorted(_VALID_ACTIONS)}",
+        )
+
     result = await db.execute(
         select(Transaction).where(Transaction.id.in_(body.transaction_ids))
     )
@@ -410,4 +431,6 @@ async def bulk_action(
         updated += 1
 
     await db.commit()
+    if body.action == "delete":
+        return {"deleted": updated, "action": body.action}
     return {"updated": updated, "action": body.action}

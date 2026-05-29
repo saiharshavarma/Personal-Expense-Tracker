@@ -41,7 +41,8 @@ def _serialize_batch(b: ReimbursementBatch) -> dict:
         "source": b.source,
         "submitted_date": b.submitted_date.isoformat() if b.submitted_date else None,
         "expected_payment_date": b.expected_payment_date.isoformat() if b.expected_payment_date else None,
-        "total_submitted": float(b.total_submitted) if b.total_submitted else None,
+        # L-6: Use `is not None` so a total_submitted of 0.0 is returned as 0.0, not None
+        "total_submitted": float(b.total_submitted) if b.total_submitted is not None else None,
         "total_received": float(b.total_received) if b.total_received else 0,
         "status": b.status,
         "expense_tool": b.expense_tool,
@@ -63,9 +64,12 @@ async def get_pipeline(
     )
     transactions = result.scalars().all()
 
-    pipeline = {"to_submit": [], "submitted": [], "approved": [], "paid": [], "rejected": []}
+    pipeline = {"to_submit": [], "submitted": [], "approved": [], "paid": [], "partial": [], "rejected": []}
+    today = date.today()
     for t in transactions:
-        status = t.reimbursement_status or "not_reimbursable"
+        # H-8: Default to "to_submit" (not "not_reimbursable") for reimbursable
+        # transactions that somehow lack a status — they clearly need to be submitted.
+        status = t.reimbursement_status or "to_submit"
         key = status.replace(" ", "_").lower()
         if key in pipeline:
             pipeline[key].append({
@@ -76,7 +80,10 @@ async def get_pipeline(
                 "expected_reimbursement": float(t.expected_reimbursement) if t.expected_reimbursement else float(t.amount),
                 "reimbursement_source": t.reimbursement_source,
                 "category": t.category,
-                "days_outstanding": (date.today() - t.date).days if t.date else 0,
+                "days_outstanding": (today - t.date).days if t.date else 0,
+                # M-7: Include actual payment/received date so the frontend can filter
+                # settled history by payment date rather than transaction date
+                "paid_date": t.reimbursement_received_date.isoformat() if t.reimbursement_received_date else None,
             })
     return pipeline
 
@@ -96,12 +103,22 @@ async def create_batch(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # C-10: Filter to only reimbursable transactions to prevent accidentally
+    # tagging non-reimbursable transactions in a batch.
+    txns_to_tag: list = []
     total = Decimal("0")
     if body.transaction_ids:
-        result = await db.execute(select(Transaction).where(Transaction.id.in_(body.transaction_ids)))
-        txns = result.scalars().all()
-        total = sum(t.expected_reimbursement or t.amount for t in txns)
+        result = await db.execute(
+            select(Transaction).where(
+                Transaction.id.in_(body.transaction_ids),
+                Transaction.is_reimbursable == True,  # C-10
+            )
+        )
+        txns_to_tag = result.scalars().all()
+        total = sum(t.expected_reimbursement or t.amount for t in txns_to_tag)
 
+    # C-5: Set status="submitted" when transactions are immediately tagged — the
+    # batch is no longer a draft once it has transactions attached to it.
     batch = ReimbursementBatch(
         name=body.name,
         source=body.source,
@@ -109,15 +126,14 @@ async def create_batch(
         submission_method=body.submission_method,
         notes=body.notes,
         total_submitted=total,
+        status="submitted" if txns_to_tag else "draft",
     )
     db.add(batch)
     await db.flush()
 
-    if body.transaction_ids:
-        result = await db.execute(select(Transaction).where(Transaction.id.in_(body.transaction_ids)))
-        for t in result.scalars().all():
-            t.reimbursement_batch_id = batch.id
-            t.reimbursement_status = "submitted"
+    for t in txns_to_tag:
+        t.reimbursement_batch_id = batch.id
+        t.reimbursement_status = "submitted"
 
     await db.commit()
     await db.refresh(batch)
@@ -155,11 +171,10 @@ async def update_reimbursement_status(
     if status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
     t.reimbursement_status = status
-    # When marked paid, record the received amount if not already set
+    # H-9: Only set received_reimbursement if it hasn't been recorded yet.
+    # If the user already captured a partial or full received amount, preserve it —
+    # they may have entered the real received value rather than the expected amount.
     if status == "paid" and not t.received_reimbursement:
         t.received_reimbursement = t.expected_reimbursement or t.amount
-    # When moved back out of paid, clear the received amount
-    elif status != "paid" and status != "partial":
-        t.received_reimbursement = None
     await db.commit()
     return {"id": str(t.id), "reimbursement_status": status}

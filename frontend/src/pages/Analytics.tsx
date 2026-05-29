@@ -4,15 +4,18 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
+import { Eye, EyeOff } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
 import { api } from '@/utils/apiClient'
-import { formatCurrency, getCurrentMonthYear, monthName, monthNameShort } from '@/lib/utils'
+import { cn, formatCurrency, getCurrentMonthYear, monthName, monthNameShort } from '@/lib/utils'
+import { useUIStore } from '@/store/ui'
 
-const { month: curMonth, year: curYear } = getCurrentMonthYear()
+// L-1: Do NOT evaluate getCurrentMonthYear() at module load time.
+// Use the lazy-initializer form of useState in the component instead.
 
 const CHART_COLORS = [
   '#3b82f6', '#22c55e', '#f97316', '#a855f7', '#ef4444',
@@ -20,7 +23,7 @@ const CHART_COLORS = [
 ]
 
 const NWS_COLORS: Record<string, string> = {
-  need: '#ef4444', want: '#f97316', savings: '#22c55e', na: '#94a3b8',
+  need: '#3b82f6', want: '#f97316', savings: '#22c55e', na: '#94a3b8',
 }
 
 const REIMB_LABELS: Record<string, string> = {
@@ -60,10 +63,14 @@ function CurrencyTooltip({ active, payload, label }: any) {
 function PieTooltip({ active, payload }: any) {
   if (!active || !payload?.length) return null
   const p = payload[0]
+  // M-4: pct can be undefined (e.g. if the backend omits it on a zero-total slice)
+  // or NaN (if data is combined client-side). Treat both as 0 for display.
+  const pct = p.payload?.pct
+  const pctDisplay = typeof pct === 'number' && isFinite(pct) ? pct : 0
   return (
     <div className="bg-popover text-popover-foreground border border-border rounded-lg px-3 py-2 shadow-lg text-xs z-50">
       <p style={{ color: p.payload.fill ?? p.fill }} className="font-semibold capitalize">{p.name}</p>
-      <p>{formatCurrency(p.value)} <span className="text-muted-foreground">({p.payload.pct ?? 0}%)</span></p>
+      <p>{formatCurrency(p.value)} <span className="text-muted-foreground">({pctDisplay}%)</span></p>
     </div>
   )
 }
@@ -97,17 +104,17 @@ function EmptyChart({ height = 192 }: { height?: number }) {
 
 // ── Chart components ─────────────────────────────────────────────────────────
 
-function SpendTrendChart({ months }: { months: number }) {
+function SpendTrendChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/spend-trends?months=${months}`)
+    api.get(`/analytics/spend-trends?months=${months}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.map((d: any) => ({ ...d, label: ml(d.year, d.month) }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [months])
+  }, [months, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -132,17 +139,17 @@ function SpendTrendChart({ months }: { months: number }) {
   )
 }
 
-function IncomeExpensesChart({ months }: { months: number }) {
+function IncomeExpensesChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/income-expenses?months=${months}`)
+    api.get(`/analytics/income-expenses?months=${months}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.map((d: any) => ({ ...d, label: ml(d.year, d.month) }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [months])
+  }, [months, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -163,17 +170,17 @@ function IncomeExpensesChart({ months }: { months: number }) {
   )
 }
 
-function CategoryBarChart({ month, year }: { month: number; year: number }) {
+function CategoryBarChart({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/category-breakdown?month=${month}&year=${year}`)
+    api.get(`/analytics/category-breakdown?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.slice(0, 8)))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 256 }} />
   if (!data.length) return <EmptyChart height={256} />
@@ -194,17 +201,17 @@ function CategoryBarChart({ month, year }: { month: number; year: number }) {
   )
 }
 
-function CategoryPieChart({ month, year }: { month: number; year: number }) {
+function CategoryPieChart({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/category-breakdown?month=${month}&year=${year}`)
+    api.get(`/analytics/category-breakdown?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.slice(0, 7)))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 256 }} />
   if (!data.length) return <EmptyChart height={256} />
@@ -225,17 +232,17 @@ function CategoryPieChart({ month, year }: { month: number; year: number }) {
   )
 }
 
-function SavingsRateChart({ months }: { months: number }) {
+function SavingsRateChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/savings-rate?months=${months}`)
+    api.get(`/analytics/savings-rate?months=${months}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.map((d: any) => ({ ...d, label: ml(d.year, d.month) }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [months])
+  }, [months, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -281,17 +288,17 @@ function SavingsRateChart({ months }: { months: number }) {
   )
 }
 
-function NWSDonut({ month, year }: { month: number; year: number }) {
+function NWSDonut({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/need-want-savings?month=${month}&year=${year}`)
+    api.get(`/analytics/need-want-savings?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.map((d: any) => ({ ...d, fill: NWS_COLORS[d.type] ?? '#94a3b8' }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -311,20 +318,20 @@ function NWSDonut({ month, year }: { month: number; year: number }) {
   )
 }
 
-function RecurringDonut({ month, year }: { month: number; year: number }) {
+function RecurringDonut({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/recurring-split?month=${month}&year=${year}`)
+    api.get(`/analytics/recurring-split?month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data.map((d: any) => ({
         ...d,
         fill: d.type === 'recurring' ? '#3b82f6' : '#a855f7',
       }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -344,17 +351,17 @@ function RecurringDonut({ month, year }: { month: number; year: number }) {
   )
 }
 
-function TopMerchantsChart({ month, year }: { month: number; year: number }) {
+function TopMerchantsChart({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/top-merchants?limit=8&month=${month}&year=${year}`)
+    api.get(`/analytics/top-merchants?limit=8&month=${month}&year=${year}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [month, year])
+  }, [month, year, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 256 }} />
   if (!data.length) return <EmptyChart height={256} />
@@ -373,17 +380,17 @@ function TopMerchantsChart({ month, year }: { month: number; year: number }) {
   )
 }
 
-function DayOfWeekChart({ months }: { months: number }) {
+function DayOfWeekChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/day-of-week?months=${months}`)
+    api.get(`/analytics/day-of-week?months=${months}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => setData(r.data))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [months])
+  }, [months, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -425,13 +432,13 @@ function DayOfWeekChart({ months }: { months: number }) {
   )
 }
 
-function BudgetTrendChart({ months }: { months: number }) {
+function BudgetTrendChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    api.get(`/analytics/budget-trend?months=${months}`)
+    api.get(`/analytics/budget-trend?months=${months}&exclude_reimbursable=${excludeReimbursable}`)
       .then(r => {
         // Aggregate per-category rows into monthly totals.
         // budgeted stays null until at least one category has a budget set —
@@ -450,7 +457,7 @@ function BudgetTrendChart({ months }: { months: number }) {
       })
       .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [months])
+  }, [months, excludeReimbursable])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
   if (!data.length) return <EmptyChart />
@@ -485,6 +492,10 @@ function ReimbursementChart() {
       }))))
       .catch(() => setData([]))
       .finally(() => setLoading(false))
+  // L-2: Intentional empty array — this chart shows all-time reimbursement
+  // pipeline data and does not respect the excludeReimbursable toggle
+  // (showing ALL statuses is the point of this overview chart).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (loading) return <Skeleton className="w-full" style={{ height: 192 }} />
@@ -537,9 +548,11 @@ function ChartCard({ title, subtitle, children }: { title: string; subtitle?: st
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export function Analytics() {
-  const [month, setMonth] = useState(curMonth)
-  const [year, setYear] = useState(curYear)
+  // L-1: Lazy initializer so the value is captured at first render
+  const [month, setMonth] = useState(() => getCurrentMonthYear().month)
+  const [year, setYear] = useState(() => getCurrentMonthYear().year)
   const [trendMonths, setTrendMonths] = useState(6)
+  const { excludeReimbursable, toggleExcludeReimbursable } = useUIStore()
 
   return (
     <MainLayout>
@@ -551,6 +564,21 @@ export function Analytics() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Reimbursable toggle */}
+          <Button
+            variant={excludeReimbursable ? 'default' : 'outline'}
+            size="sm"
+            onClick={toggleExcludeReimbursable}
+            className={cn(
+              'h-8 px-3 text-xs gap-1.5',
+              excludeReimbursable && 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500',
+            )}
+            title={excludeReimbursable ? 'Reimbursable transactions excluded — click to show all' : 'Click to exclude reimbursable transactions from totals'}
+          >
+            {excludeReimbursable ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {excludeReimbursable ? 'Excl. Reimbursable' : 'Show All'}
+          </Button>
+
           {/* Trend window selector */}
           <div className="flex items-center rounded-lg border overflow-hidden text-xs">
             {([3, 6, 12] as const).map(n => (
@@ -577,15 +605,23 @@ export function Analytics() {
         </div>
       </div>
 
+      {/* Reimbursable filter notice */}
+      {excludeReimbursable && (
+        <div className="flex items-center gap-2 mb-5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
+          <EyeOff className="w-3.5 h-3.5 flex-shrink-0" />
+          <span>Reimbursable transactions are excluded from all charts. Toggle <strong>Show All</strong> above to include them.</span>
+        </div>
+      )}
+
       <div className="space-y-8">
         {/* ── Spending Trends ── */}
         <Section title="Spending Trends" emoji="📈">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <ChartCard title="Monthly Spend" subtitle={`Last ${trendMonths} months`}>
-              <SpendTrendChart months={trendMonths} />
+              <SpendTrendChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
             <ChartCard title="Income vs Expenses" subtitle={`Last ${trendMonths} months`}>
-              <IncomeExpensesChart months={trendMonths} />
+              <IncomeExpensesChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
         </Section>
@@ -594,10 +630,10 @@ export function Analytics() {
         <Section title="Category Analysis" emoji="🗂️">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <ChartCard title="Spend by Category" subtitle={`${monthName(month)} ${year} — top 8`}>
-              <CategoryBarChart month={month} year={year} />
+              <CategoryBarChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
             <ChartCard title="Category Mix" subtitle={`${monthName(month)} ${year}`}>
-              <CategoryPieChart month={month} year={year} />
+              <CategoryPieChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
         </Section>
@@ -607,11 +643,11 @@ export function Analytics() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
               <ChartCard title="Savings Rate Trend" subtitle={`Last ${trendMonths} months`}>
-                <SavingsRateChart months={trendMonths} />
+                <SavingsRateChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
               </ChartCard>
             </div>
             <ChartCard title="Need / Want / Savings" subtitle={`${monthName(month)} ${year}`}>
-              <NWSDonut month={month} year={year} />
+              <NWSDonut month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
         </Section>
@@ -621,11 +657,11 @@ export function Analytics() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
               <ChartCard title="Top Merchants" subtitle={`${monthName(month)} ${year}`}>
-                <TopMerchantsChart month={month} year={year} />
+                <TopMerchantsChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
               </ChartCard>
             </div>
             <ChartCard title="Recurring vs One-time" subtitle={`${monthName(month)} ${year}`}>
-              <RecurringDonut month={month} year={year} />
+              <RecurringDonut month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
         </Section>
@@ -634,10 +670,10 @@ export function Analytics() {
         <Section title="Spending Behavior" emoji="🗓️">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <ChartCard title="Spend by Day of Week" subtitle={`Last ${trendMonths} months — intensity shows relative spend`}>
-              <DayOfWeekChart months={trendMonths} />
+              <DayOfWeekChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
             <ChartCard title="Budget vs Actual" subtitle={`Last ${trendMonths} months — all categories combined`}>
-              <BudgetTrendChart months={trendMonths} />
+              <BudgetTrendChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>
           </div>
         </Section>

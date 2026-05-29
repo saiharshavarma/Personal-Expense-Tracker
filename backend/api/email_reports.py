@@ -6,6 +6,7 @@ PUT  /api/email-reports/settings    — update email settings
 POST /api/email-reports/test        — send a test email right now
 POST /api/email-reports/send-report — manually trigger monthly report
 """
+import logging
 from datetime import date
 from typing import Optional
 
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_current_user
 from db.database import get_db
 from db.models import UserPreferences
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["email_reports"])
 
@@ -129,7 +132,8 @@ async def send_test_email(
     try:
         await send_reminder(test_cfg, today.month, today.year)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Email failed: {exc}")
+        logger.error("Test email failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send test email. Check SMTP settings and server logs.")
 
     return {"status": "sent", "to": cfg["report_email"]}
 
@@ -152,6 +156,7 @@ async def manual_send_report(
     try:
         await send_monthly_report(db, cfg, today.month, today.year)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Email failed: {exc}")
+        logger.error("Manual report send failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send report. Check SMTP settings and server logs.")
 
     return {"status": "sent", "to": cfg.get("report_email"), "month": today.month, "year": today.year}

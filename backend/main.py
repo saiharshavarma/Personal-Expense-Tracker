@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.database import engine, Base
 from api import auth, accounts, transactions, budgets, reimbursements, \
-    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences, rules, email_reports
+    subscriptions, trips, analytics, import_routes, ios, ai_insights, export, backup, preferences, rules, email_reports, system
 
 
 _MIGRATIONS = [
@@ -15,6 +15,8 @@ _MIGRATIONS = [
     "ALTER TABLE merchant_rules ADD COLUMN IF NOT EXISTS tags TEXT[]",
     # 2026-05: Currency preference
     "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD'",
+    # 2026-05: Global budget templates for monthly budget defaults
+    "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS budget_templates JSONB DEFAULT '[]'::jsonb",
     # 2026-05: Budget subcategory support
     "ALTER TABLE budgets ADD COLUMN IF NOT EXISTS subcategory VARCHAR(100)",
     # Drop old unique constraint so partial indexes can take over
@@ -84,3 +86,4 @@ app.include_router(backup.router, prefix="/api/backup")
 app.include_router(preferences.router, prefix="/api/preferences")
 app.include_router(rules.router, prefix="/api/rules")
 app.include_router(email_reports.router, prefix="/api/email-reports")
+app.include_router(system.router, prefix="/api/system")

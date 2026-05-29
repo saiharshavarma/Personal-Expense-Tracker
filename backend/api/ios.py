@@ -16,12 +16,20 @@ router = APIRouter(tags=["ios"])
 
 async def _verify_ios_key(x_ios_api_key: Optional[str] = Header(default=None)) -> None:
     """
-    Validate the iOS API key when IOS_API_KEY is configured in .env.
-    If IOS_API_KEY is not set the endpoint remains open (local-network only).
+    Validate the iOS API key from the X-iOS-API-Key header.
+    IOS_API_KEY MUST be set in .env — the endpoint is disabled when it is absent
+    to prevent unauthenticated transaction ingestion from the local network.
     """
-    if settings.ios_api_key:
-        if x_ios_api_key != settings.ios_api_key:
-            raise HTTPException(status_code=401, detail="Invalid or missing iOS API key")
+    if not settings.ios_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "iOS endpoint is disabled. "
+                "Set IOS_API_KEY in your .env file and restart to enable it."
+            ),
+        )
+    if x_ios_api_key != settings.ios_api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing iOS API key")
 
 
 class IOSTransactionRequest(BaseModel):

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Target, Pencil, Trash2,
-  Loader2, Copy, TrendingUp, TrendingDown, Minus,
+  Loader2, Copy, TrendingUp, TrendingDown, Minus, LayoutGrid,
 } from 'lucide-react'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -31,7 +31,7 @@ import { monthName, getCurrentMonthYear, formatCurrency } from '@/lib/utils'
 import { ALL_CATEGORIES, getCategoryColor, getSubcategories } from '@/lib/categories'
 import { api } from '@/utils/apiClient'
 
-const { month: currentMonth, year: currentYear } = getCurrentMonthYear()
+// L-1: Do NOT evaluate getCurrentMonthYear() at module load time.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -150,7 +150,8 @@ function BudgetDialog({ open, onClose, onSaved, month, year, editing }: BudgetDi
     <Dialog open={open} onOpenChange={v => !v && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Budget' : 'Add Budget'}</DialogTitle>
+          {/* M-5: "Edit" only when there's an existing budget row id (falsy '' means new) */}
+          <DialogTitle>{editing?.id ? 'Edit Budget' : 'Add Budget'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -296,8 +297,9 @@ function NWSEditor({ open, onClose, onSaved, current }: NWSEditorProps) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function Budget() {
-  const [month, setMonth] = useState(currentMonth)
-  const [year, setYear] = useState(currentYear)
+  // L-1: Lazy initializer to capture the correct month at render time
+  const [month, setMonth] = useState(() => getCurrentMonthYear().month)
+  const [year, setYear] = useState(() => getCurrentMonthYear().year)
   const [data, setData] = useState<ActualsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -305,6 +307,8 @@ export function Budget() {
   const [nwsOpen, setNwsOpen] = useState(false)
   const [copying, setCopying] = useState(false)
   const [copyMsg, setCopyMsg] = useState('')
+  const [applyingTemplates, setApplyingTemplates] = useState(false)
+  const [templateMsg, setTemplateMsg] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
@@ -347,6 +351,25 @@ export function Budget() {
     } catch { /* ignore */ }
   }
 
+  const handleApplyTemplates = async () => {
+    setApplyingTemplates(true)
+    setTemplateMsg('')
+    try {
+      const r = await api.post<{ created: number; skipped: number }>(
+        '/budgets/apply-templates', null, { params: { month, year } }
+      )
+      const { created, skipped } = r.data
+      setTemplateMsg(`Applied ${created} template${created !== 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} already existed)` : ''}`)
+      fetchData()
+    } catch (e: unknown) {
+      const ex = e as { response?: { data?: { detail?: string } } }
+      setTemplateMsg(ex?.response?.data?.detail ?? 'No templates configured — add them in Settings → Budget Defaults')
+    } finally {
+      setApplyingTemplates(false)
+      setTimeout(() => setTemplateMsg(''), 4000)
+    }
+  }
+
   const nwsTargets = data
     ? {
         needs: data.nws_summary.needs.target_pct,
@@ -379,6 +402,11 @@ export function Budget() {
         subtitle="Set and track your monthly spending targets"
         actions={
           <>
+            <Button variant="outline" size="sm" onClick={handleApplyTemplates} disabled={applyingTemplates}
+              title="Apply global budget defaults from Settings → Budget Defaults">
+              {applyingTemplates ? <Loader2 className="w-4 h-4 animate-spin" /> : <LayoutGrid className="w-4 h-4" />}
+              Apply Templates
+            </Button>
             <Button variant="outline" size="sm" onClick={handleCopyPrevious} disabled={copying}>
               {copying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
               Copy Previous Month
@@ -408,6 +436,16 @@ export function Budget() {
                 className="text-sm text-muted-foreground"
               >
                 {copyMsg}
+              </motion.p>
+            )}
+            {templateMsg && (
+              <motion.p
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+                className="text-sm text-muted-foreground"
+              >
+                {templateMsg}
               </motion.p>
             )}
           </AnimatePresence>
@@ -607,9 +645,9 @@ export function Budget() {
                             /* Subcategory row: indented with connector */
                             <span className="ml-4 w-2 h-2 rounded-full flex-shrink-0 border-2 border-current opacity-50" />
                           ) : (
+                            // M-3: getCategoryColor returns Tailwind class strings — use className, not style.backgroundColor
                             <span
-                              className="w-2 h-2 rounded-full flex-shrink-0"
-                              style={{ backgroundColor: getCategoryColor(row.category) }}
+                              className={`w-2 h-2 rounded-full flex-shrink-0 ${getCategoryColor(row.category)}`}
                             />
                           )}
                           <div className="min-w-0">
@@ -663,7 +701,10 @@ export function Budget() {
                             if (row.id) {
                               setEditing({ id: row.id, category: row.category, subcategory: row.subcategory ?? undefined, budget_amount: row.budget_amount })
                             } else {
-                              setEditing(null)
+                              // M-5: Pre-populate category/subcategory for unbudgeted rows so the user
+                              // doesn't need to re-select what's already visible in the table.
+                              // Empty string id → BudgetDialog treats this as a POST (create), not a PUT.
+                              setEditing({ id: '', category: row.category, subcategory: row.subcategory ?? undefined, budget_amount: 0 })
                             }
                             setDialogOpen(true)
                           }}

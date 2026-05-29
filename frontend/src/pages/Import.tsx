@@ -20,9 +20,23 @@ interface QueueTransaction {
   description: string
   amount: number
   date: string
-  ai_category: string | null
-  ai_confidence: number | null
   direction: 'debit' | 'credit'
+  // AI fields
+  ai_category: string | null
+  ai_subcategory: string | null
+  ai_confidence: number | null  // 0–1 scale (e.g. 0.85 = 85%)
+  ai_flags: string[]
+  // User-editable classification fields (pre-filled by AI)
+  category: string | null
+  subcategory: string | null
+  merchant: string | null
+  need_want_savings: string | null
+  fixed_variable: string | null
+  personal_work_shared: string | null
+  is_reimbursable: boolean
+  is_recurring: boolean
+  tags: string[]
+  batch_id: string | null
 }
 
 interface PreviewTransaction {
@@ -82,12 +96,10 @@ function uid() {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
+  // Keyed on actual backend batch statuses: "staged" (pending review) and "complete".
   const map: Record<string, { label: string; variant: 'success' | 'warning' | 'destructive' | 'secondary' | 'outline' | 'default' }> = {
-    completed: { label: 'Completed', variant: 'success' },
-    partial: { label: 'Partial', variant: 'warning' },
-    failed: { label: 'Failed', variant: 'destructive' },
-    processing: { label: 'Processing', variant: 'secondary' },
-    pending: { label: 'Pending', variant: 'outline' },
+    staged:   { label: 'Staged',     variant: 'secondary' },
+    complete: { label: 'Complete',   variant: 'success'   },
   }
   const cfg = map[status] ?? { label: status, variant: 'outline' as const }
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>
@@ -461,16 +473,16 @@ function ReviewQueueTab() {
 
   const handleAcceptAllClean = async () => {
     const cleanIds = rows
-      .filter(r => (r.ai_confidence ?? 0) >= 90 && !r.localAction)
+      .filter(r => (r.ai_confidence ?? 0) >= 0.90 && !r.localAction)
       .map(r => r.id)
     for (const id of cleanIds) {
       await applyAction(id, 'accept')
     }
   }
 
-  const low = rows.filter(r => (r.ai_confidence ?? 0) < 75)
-  const medium = rows.filter(r => { const c = r.ai_confidence ?? 0; return c >= 75 && c < 90 })
-  const clean = rows.filter(r => (r.ai_confidence ?? 0) >= 90)
+  const low = rows.filter(r => (r.ai_confidence ?? 0) < 0.75)
+  const medium = rows.filter(r => { const c = r.ai_confidence ?? 0; return c >= 0.75 && c < 0.90 })
+  const clean = rows.filter(r => (r.ai_confidence ?? 0) >= 0.90)
   const pendingClean = clean.filter(r => !r.localAction).length
 
   if (loading) {
@@ -525,7 +537,7 @@ function ReviewQueueTab() {
         <ReviewSection
           title="Low Confidence"
           emoji="🔴"
-          subtitle="< 75% — requires manual review"
+          subtitle="< 75% confidence — requires manual review"
           rows={low}
           saving={saving}
           editingId={editingId}
@@ -618,7 +630,7 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                   const isEditing = editingId === row.id
                   const done = Boolean(row.localAction)
                   const conf = row.ai_confidence ?? 0
-                  const confColor = conf < 75 ? 'text-red-500' : conf < 90 ? 'text-yellow-500' : 'text-green-500'
+                  const confColor = conf < 0.75 ? 'text-red-500' : conf < 0.90 ? 'text-yellow-500' : 'text-green-500'
 
                   return (
                     <tr key={row.id} className={`hover:bg-muted/30 ${done ? 'opacity-50' : ''}`}>
@@ -645,7 +657,7 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                         )}
                       </td>
                       <td className={`py-2.5 pr-3 text-right text-xs font-medium tabular-nums ${confColor}`}>
-                        {conf.toFixed(0)}%
+                        {(conf * 100).toFixed(0)}%
                       </td>
                       <td className="py-2.5">
                         {done ? (

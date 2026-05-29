@@ -15,6 +15,7 @@ import { AskAI } from '@/pages/AskAI'
 import { FinanceAdvisor } from '@/pages/FinanceAdvisor'
 import { Settings } from '@/pages/Settings'
 import { CommandPalette } from '@/components/CommandPalette'
+import { Mascot } from '@/components/Mascot'
 
 export function App() {
   return (
@@ -31,6 +32,8 @@ export function App() {
             path="/*"
             element={
               <AuthGate>
+                {/* Mascot lives here — outside Routes so it never remounts on navigation */}
+                <Mascot />
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/transactions" element={<Transactions />} />

@@ -36,12 +36,22 @@ class SubscriptionUpdate(SubscriptionCreate):
     is_active: Optional[bool] = None
 
 
+def _to_monthly(amount: float, billing_frequency: str | None) -> float:
+    """Convert a billing amount to its monthly equivalent."""
+    if billing_frequency == "yearly":
+        return amount / 12
+    if billing_frequency == "quarterly":
+        return amount / 3
+    if billing_frequency == "weekly":
+        return amount * 52 / 12
+    # H-12: biweekly = every two weeks = 26 payments per year
+    if billing_frequency == "biweekly":
+        return amount * 26 / 12
+    return amount  # monthly or None → treat as monthly
+
+
 def _serialize(s: Subscription) -> dict:
-    monthly = float(s.amount)
-    if s.billing_frequency == "yearly":
-        monthly = float(s.amount) / 12
-    elif s.billing_frequency == "quarterly":
-        monthly = float(s.amount) / 3
+    monthly = _to_monthly(float(s.amount), s.billing_frequency)
     return {
         "id": str(s.id),
         "name": s.name,
@@ -81,20 +91,28 @@ async def list_subscriptions(
 async def subscription_summary(_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Subscription).where(Subscription.is_active == True))
     subs = result.scalars().all()
-    total_monthly = sum(
-        float(s.amount) / (12 if s.billing_frequency == "yearly" else 3 if s.billing_frequency == "quarterly" else 1)
-        for s in subs
-    )
+    total_monthly = sum(_to_monthly(float(s.amount), s.billing_frequency) for s in subs)
     personal_monthly = sum(
-        float(s.amount) / (12 if s.billing_frequency == "yearly" else 3 if s.billing_frequency == "quarterly" else 1)
+        _to_monthly(float(s.amount), s.billing_frequency)
         for s in subs if s.personal_work_shared == "personal"
     )
-    work_monthly = total_monthly - personal_monthly
+    work_monthly = sum(
+        _to_monthly(float(s.amount), s.billing_frequency)
+        for s in subs if s.personal_work_shared == "work"
+    )
+    # M-14: Include shared subscriptions as a distinct line item so the frontend
+    # can show "Personal / Shared / Work" breakdowns rather than silently folding
+    # shared into the total with no attribution.
+    shared_monthly = sum(
+        _to_monthly(float(s.amount), s.billing_frequency)
+        for s in subs if s.personal_work_shared == "shared"
+    )
     return {
         "total_monthly": round(total_monthly, 2),
         "total_annual": round(total_monthly * 12, 2),
         "personal_monthly": round(personal_monthly, 2),
         "work_monthly": round(work_monthly, 2),
+        "shared_monthly": round(shared_monthly, 2),
         "count": len(subs),
     }
 

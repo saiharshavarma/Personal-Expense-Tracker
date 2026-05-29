@@ -285,9 +285,9 @@ async def send_monthly_report(db: AsyncSession, cfg: dict, month: int, year: int
         "Open your dashboard for the full breakdown: http://localhost:3000/budget"
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _send_smtp, cfg, subject, body_html, body_text)
-    logger.info(f"Monthly report sent to {cfg.get('report_email')} for {mname} {year}")
+    logger.info("Monthly report sent to %s for %s %s", cfg.get('report_email'), mname, year)
 
 
 async def send_reminder(cfg: dict, month: int, year: int) -> None:
@@ -303,9 +303,9 @@ async def send_reminder(cfg: dict, month: int, year: int) -> None:
         "Go to: http://localhost:3000/import"
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _send_smtp, cfg, subject, body_html, body_text)
-    logger.info(f"Reminder sent to {cfg.get('report_email')} for {mname} {year}")
+    logger.info("Reminder sent to %s for %s %s", cfg.get('report_email'), mname, year)
 
 
 # ── Daily scheduler ───────────────────────────────────────────────────────────
@@ -348,7 +348,7 @@ async def _scheduler_loop():
                                 prefs.dashboard_layout = layout
                                 await session.commit()
                             except Exception as exc:
-                                logger.error(f"Failed to send monthly report: {exc}")
+                                logger.error("Failed to send monthly report: %s", exc)
 
                     # Upload reminder
                     if cfg.get("reminder_enabled") and cfg.get("reminder_day") == today.day:
@@ -361,10 +361,10 @@ async def _scheduler_loop():
                                 prefs.dashboard_layout = layout
                                 await session.commit()
                             except Exception as exc:
-                                logger.error(f"Failed to send reminder: {exc}")
+                                logger.error("Failed to send reminder: %s", exc)
 
         except Exception as exc:
-            logger.error(f"Scheduler loop error: {exc}")
+            logger.error("Scheduler loop error: %s", exc)
 
         # Sleep until same time tomorrow (check every hour is sufficient)
         await asyncio.sleep(3600)

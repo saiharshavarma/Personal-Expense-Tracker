@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Optional, List
 from decimal import Decimal
@@ -12,6 +13,22 @@ from db.database import get_db
 from db.models import MerchantRule
 
 router = APIRouter(tags=["rules"])
+
+_VALID_MATCH_TYPES = {"exact", "contains", "startswith", "regex"}
+
+
+def _validate_rule_body(pattern: str, match_type: Optional[str]) -> None:
+    """Validate match_type is known and regex patterns compile without error."""
+    if match_type and match_type not in _VALID_MATCH_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid match_type '{match_type}'. Must be one of: {sorted(_VALID_MATCH_TYPES)}",
+        )
+    if match_type == "regex":
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid regex pattern: {exc}")
 
 
 class RuleBody(BaseModel):
@@ -67,6 +84,7 @@ async def create_rule(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _validate_rule_body(body.pattern, body.match_type)
     rule = MerchantRule(
         pattern=body.pattern,
         match_type=body.match_type,
@@ -93,6 +111,8 @@ async def update_rule(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _validate_rule_body(body.pattern, body.match_type)
+
     result = await db.execute(select(MerchantRule).where(MerchantRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if rule is None:

@@ -108,7 +108,7 @@ class BankOfAmericaParser(BaseParser):
         return results
 
     def _parse_date(self, s: str) -> Optional[object]:
-        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m/%d/%y"):
+        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
             try:
                 return datetime.strptime(s.strip(), fmt).date()
             except Exception:

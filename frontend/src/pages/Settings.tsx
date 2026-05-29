@@ -5,7 +5,7 @@ import {
   Database, Download, Shield, ChevronRight, Sun, Moon, Check, X,
   Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save,
   Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw, Trash2, Plus,
-  Mail, Bell,
+  Mail, Bell, LayoutGrid,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -18,15 +18,16 @@ import { Separator } from '@/components/ui/separator'
 import { Input } from '@/components/ui/input'
 import { useUIStore } from '@/store/ui'
 import { useAuthStore, usePreferencesStore } from '@/store'
-import { api } from '@/utils/apiClient'
+import { api, getAuthErrorMessage } from '@/utils/apiClient'
 import { AccountsModal } from '@/components/accounts/AccountsModal'
-import { CATEGORY_MAP } from '@/lib/categories'
+import { CATEGORY_MAP, ALL_CATEGORIES } from '@/lib/categories'
 
-type SettingsTab = 'accounts' | 'categories' | 'ai' | 'ios' | 'appearance' | 'notifications' | 'backup' | 'security' | 'health'
+type SettingsTab = 'accounts' | 'categories' | 'budgets' | 'ai' | 'ios' | 'appearance' | 'notifications' | 'backup' | 'security' | 'health'
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'accounts', label: 'Accounts & Income', icon: CreditCard },
   { id: 'categories', label: 'Categories & Rules', icon: Tag },
+  { id: 'budgets', label: 'Budget Defaults', icon: LayoutGrid },
   { id: 'ai', label: 'AI Configuration', icon: Brain },
   { id: 'ios', label: 'iOS Shortcut', icon: Smartphone },
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -93,11 +94,8 @@ interface MerchantRule {
   created_at: string | null
 }
 
-const ALL_CATEGORIES_SETTINGS = [
-  'Food & Dining', 'Groceries', 'Transportation', 'Shopping', 'Entertainment',
-  'Health & Medical', 'Travel', 'Utilities', 'Housing', 'Education',
-  'Personal Care', 'Business', 'Investments', 'Income', 'Transfers', 'Other',
-]
+// Use the canonical taxonomy from lib/categories — do not maintain a separate list here.
+const ALL_CATEGORIES_SETTINGS = ALL_CATEGORIES
 
 function BudgetRuleEditor() {
   const [nws, setNws] = useState({ needs: 50, wants: 30, savings: 20 })
@@ -283,7 +281,7 @@ function CategoriesTab() {
                   >
                     <option value="contains">contains</option>
                     <option value="exact">exact</option>
-                    <option value="starts_with">starts with</option>
+                    <option value="startswith">starts with</option>
                     <option value="regex">regex</option>
                   </select>
                 </div>
@@ -923,6 +921,16 @@ function AppearanceTab() {
   const { theme, toggleTheme } = useUIStore()
   const { prefs, update } = usePreferencesStore()
 
+  // Mochi mascot toggle — stored in localStorage for instant UX
+  const [mochiEnabled, setMochiEnabled] = useState(
+    () => localStorage.getItem('mochi_enabled') !== 'false'
+  )
+  const toggleMochi = (v: boolean) => {
+    localStorage.setItem('mochi_enabled', v ? 'true' : 'false')
+    setMochiEnabled(v)
+    window.dispatchEvent(new CustomEvent('mochi_enabled_changed', { detail: v }))
+  }
+
   return (
     <div className="space-y-4">
       <Card>
@@ -970,6 +978,37 @@ function AppearanceTab() {
           <p className="text-xs text-muted-foreground mt-2">
             Preview: {new Intl.NumberFormat('en-US', { style: 'currency', currency: prefs?.currency ?? 'USD' }).format(1234.56)}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Mochi — Finance Mascot</CardTitle>
+          <CardDescription>
+            Your red panda companion who sneaks around, inspects your stats, and gives AI-powered commentary
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Show Mochi</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Click Mochi to start walking · Press and move to drag
+              </p>
+            </div>
+            <Switch
+              id="mochi-toggle"
+              checked={mochiEnabled}
+              onCheckedChange={toggleMochi}
+            />
+          </div>
+          {mochiEnabled && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3 text-xs text-amber-800 dark:text-amber-300 space-y-1">
+              <p>🚶 <strong>Click</strong> Mochi to walk toward stats</p>
+              <p>🖱️ <strong>Press and move</strong> to reposition — throw her for an annoyed reaction</p>
+              <p>🤖 <strong>AI comments</strong> are powered by your configured AI provider</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -1354,6 +1393,181 @@ function SecurityTab() {
 
 // ── System Health Tab ──────────────────────────────────────────────────────────
 
+interface UpdateStatus {
+  branch: string
+  remote: string
+  remote_branch: string
+  local_sha: string
+  remote_sha: string | null
+  dirty: boolean
+  dirty_count: number
+  ahead: number
+  behind: number
+  diverged: boolean
+  remote_reachable: boolean
+  update_available: boolean
+  blocked_reason: string | null
+  checked_at: string
+}
+
+interface UpdateJob {
+  running: boolean
+  status: 'idle' | 'queued' | 'running' | 'complete' | 'failed'
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  log: string[]
+}
+
+function shortSha(sha?: string | null) {
+  return sha ? sha.slice(0, 7) : 'unknown'
+}
+
+function ApplicationUpdateCard() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [job, setJob] = useState<UpdateJob | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [checking, setChecking] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadStatus = useCallback(async () => {
+    setChecking(true)
+    setError(null)
+    try {
+      const [statusRes, jobRes] = await Promise.all([
+        api.get('/system/update/status'),
+        api.get('/system/update/job').catch(() => ({ data: null })),
+      ])
+      setStatus(statusRes.data)
+      setJob(jobRes.data)
+    } catch (e) {
+      setError(getAuthErrorMessage(e))
+    } finally {
+      setChecking(false)
+      setLoading(false)
+    }
+  }, [])
+
+  const loadJob = useCallback(async () => {
+    try {
+      const res = await api.get('/system/update/job')
+      setJob(res.data)
+      if (res.data.status === 'complete') {
+        loadStatus()
+      }
+    } catch (e) {
+      setError(getAuthErrorMessage(e))
+    }
+  }, [loadStatus])
+
+  useEffect(() => {
+    loadStatus()
+  }, [loadStatus])
+
+  useEffect(() => {
+    if (!job?.running) return
+    const timer = window.setInterval(loadJob, 2500)
+    return () => window.clearInterval(timer)
+  }, [job?.running, loadJob])
+
+  const startUpdate = async () => {
+    setStarting(true)
+    setError(null)
+    try {
+      const res = await api.post('/system/update')
+      setJob(res.data)
+    } catch (e) {
+      setError(getAuthErrorMessage(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const isRunning = !!job?.running
+  const isFailed = job?.status === 'failed'
+  const isComplete = job?.status === 'complete'
+  const canUpdate = !!status?.update_available && !isRunning
+
+  const state = isRunning
+    ? { label: 'Updating', icon: Loader2, className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' }
+    : isFailed
+      ? { label: 'Update failed', icon: AlertCircle, className: 'bg-destructive/10 text-destructive' }
+      : error
+        ? { label: 'Unavailable', icon: AlertCircle, className: 'bg-destructive/10 text-destructive' }
+        : status?.blocked_reason
+          ? { label: 'Needs attention', icon: AlertCircle, className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' }
+          : status?.update_available
+            ? { label: 'Update available', icon: Download, className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' }
+            : isComplete
+              ? { label: 'Update complete', icon: CheckCircle2, className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' }
+              : { label: 'Up to date', icon: CheckCircle2, className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' }
+
+  const StateIcon = state.icon
+  const detail = error
+    || job?.error
+    || status?.blocked_reason
+    || (status?.update_available
+      ? `${status.behind} update${status.behind === 1 ? '' : 's'} available from origin/main.`
+      : status
+        ? `Running ${shortSha(status.local_sha)} from ${status.branch || 'current branch'}.`
+        : 'Checking GitHub for application updates.')
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-base">Application Update</CardTitle>
+            <CardDescription>Update this local installation from GitHub main</CardDescription>
+          </div>
+          <Badge variant="secondary" className={state.className}>
+            <StateIcon className={`w-3.5 h-3.5 mr-1 ${isRunning ? 'animate-spin' : ''}`} />
+            {state.label}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking update status...
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">{detail}</p>
+            {status && (
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                <div>Local: {shortSha(status.local_sha)}</div>
+                <div>GitHub main: {shortSha(status.remote_sha)}</div>
+                <div>Behind: {status.behind}</div>
+                <div>Local changes: {status.dirty ? `${status.dirty_count} file${status.dirty_count === 1 ? '' : 's'}` : 'None'}</div>
+              </div>
+            )}
+            {job?.log?.length ? (
+              <div className="max-h-32 overflow-auto rounded border bg-muted/30 p-2 text-xs text-muted-foreground">
+                {job.log.slice(-6).map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={startUpdate} disabled={!canUpdate || starting}>
+                {starting || isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Update Application
+              </Button>
+              <Button size="sm" variant="outline" onClick={loadStatus} disabled={checking || isRunning}>
+                {checking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Check Again
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function HealthTab() {
   const [health, setHealth] = useState<{ status: string; version: string } | null>(null)
   const [prefs, setPrefs] = useState<Record<string, unknown>>({})
@@ -1437,6 +1651,7 @@ function HealthTab() {
 
   return (
     <div className="space-y-4">
+      <ApplicationUpdateCard />
       {Object.entries(grouped).map(([group, items]) => (
         <Card key={group}>
           <CardHeader className="pb-2">
@@ -1684,9 +1899,194 @@ function NotificationsTab() {
   )
 }
 
+// ── Budget Defaults Tab ───────────────────────────────────────────────────────
+
+interface BudgetTemplate {
+  category: string
+  subcategory: string | null
+  amount: number
+}
+
+function BudgetDefaultsTab() {
+  const [templates, setTemplates] = useState<BudgetTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [newCat, setNewCat] = useState('')
+  const [newSub, setNewSub] = useState('')
+  const [newAmt, setNewAmt] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.get('/budgets/templates')
+      .then(r => setTemplates(r.data ?? []))
+      .catch(() => setTemplates([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Available subcategories for the selected category
+  const subcategories = newCat ? (CATEGORY_MAP[newCat] ?? []) : []
+
+  const handleAdd = async () => {
+    if (!newCat) { setErr('Select a category'); return }
+    const amount = parseFloat(newAmt)
+    if (!amount || amount <= 0) { setErr('Enter a valid amount'); return }
+    setSaving(true); setErr('')
+    try {
+      const res = await api.post('/budgets/templates', {
+        category: newCat,
+        subcategory: newSub || null,
+        amount,
+      })
+      setTemplates(res.data.templates ?? [])
+      setNewCat(''); setNewSub(''); setNewAmt('')
+      setMsg('Template saved!'); setTimeout(() => setMsg(''), 2500)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail ?? 'Failed to save template')
+    } finally { setSaving(false) }
+  }
+
+  const handleDelete = async (cat: string, sub: string | null) => {
+    try {
+      const params = new URLSearchParams({ category: cat })
+      if (sub) params.set('subcategory', sub)
+      const res = await api.delete(`/budgets/templates?${params.toString()}`)
+      setTemplates(res.data.templates ?? [])
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Explainer */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Global Budget Defaults</CardTitle>
+          <CardDescription>
+            Set default budget amounts per category. On the Budget page, click <strong>Apply Templates</strong> to
+            instantly create this month's budgets from these defaults — existing budgets won't be overwritten.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      {/* Add template */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Add / Update Template</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Category */}
+            <div className="space-y-1">
+              <Label className="text-xs">Category</Label>
+              <select
+                value={newCat}
+                onChange={e => { setNewCat(e.target.value); setNewSub('') }}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">Select category…</option>
+                {ALL_CATEGORIES_SETTINGS.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Subcategory (optional) */}
+            <div className="space-y-1">
+              <Label className="text-xs">Subcategory <span className="text-muted-foreground">(optional)</span></Label>
+              <select
+                value={newSub}
+                onChange={e => setNewSub(e.target.value)}
+                disabled={!newCat || subcategories.length === 0}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+              >
+                <option value="">Any / Category-level</option>
+                {subcategories.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Amount */}
+            <div className="space-y-1">
+              <Label className="text-xs">Monthly Budget ($)</Label>
+              <Input
+                type="number" min="1" step="10"
+                placeholder="e.g. 500"
+                value={newAmt}
+                onChange={e => setNewAmt(e.target.value)}
+                className="h-9 text-sm"
+              />
+            </div>
+          </div>
+
+          {err && <p className="text-xs text-destructive flex items-center gap-1"><AlertCircle className="w-3 h-3" />{err}</p>}
+          {msg && <p className="text-xs text-green-500 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{msg}</p>}
+
+          <Button size="sm" onClick={handleAdd} disabled={saving || !newCat || !newAmt}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+            {templates.some(t => t.category === newCat && t.subcategory === (newSub || null)) ? 'Update Template' : 'Add Template'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Template list */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Saved Templates ({templates.length})</CardTitle>
+          <CardDescription className="text-xs">These amounts will be used as defaults when you click "Apply Templates" on the Budget page.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map(i => <div key={i} className="h-8 bg-muted rounded animate-pulse" />)}
+            </div>
+          ) : templates.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <LayoutGrid className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              <p className="text-sm">No templates yet</p>
+              <p className="text-xs mt-1">Add your first template above</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {templates.map((t, i) => (
+                <div key={i} className="flex items-center justify-between py-2.5 gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">
+                      {t.category}
+                      {t.subcategory && (
+                        <span className="text-muted-foreground font-normal"> › {t.subcategory}</span>
+                      )}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums text-primary">
+                    ${t.amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                  </span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    onClick={() => handleDelete(t.category, t.subcategory)}
+                    title="Remove template"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 const TAB_CONTENT: Record<SettingsTab, React.ComponentType> = {
   accounts: AccountsTab,
   categories: CategoriesTab,
+  budgets: BudgetDefaultsTab,
   ai: AITab,
   ios: IOSTab,
   appearance: AppearanceTab,

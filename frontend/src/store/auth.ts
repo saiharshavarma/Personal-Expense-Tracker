@@ -144,7 +144,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   logout: () => {
     clearToken()
-    set({ isAuthenticated: false, status: null })
+    set({ isAuthenticated: false })
     api.post('/auth/logout').catch(() => {})
   },
 

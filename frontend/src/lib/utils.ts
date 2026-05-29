@@ -6,6 +6,9 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatCurrency(amount: number, currency = 'USD'): string {
+  // L-10: Guard against NaN/Infinity so callers that pass raw API values (which
+  // may be null/undefined coerced to NaN) get "—" instead of a runtime exception.
+  if (!isFinite(amount)) return '—'
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency,
@@ -110,23 +113,17 @@ export function getReviewReason(t: Parameters<typeof getReviewReasons>[0]): Revi
   return all.length > 0 ? all[0] : null
 }
 
-// ── Computed needs-review ─────────────────────────────────────────────────────
-// Returns true when a transaction is effectively missing required fields,
-// regardless of the backend `needs_review` flag.  Use this everywhere in the
-// UI instead of checking `t.needs_review` directly.
+// ── Needs-review gate ─────────────────────────────────────────────────────────
+// Returns true only when the backend `needs_review` flag is explicitly true.
+// The backend is the authoritative source — it weighs AI confidence, missing
+// fields, and manual overrides.  Frontend field-level hints (category missing,
+// no subcategory, etc.) are surfaced via `getReviewReasons` for display, but
+// must not override an explicit `needs_review=false` decision from the server.
 export function isNeedsReview(t: {
   needs_review?: boolean
-  category: string | null
-  subcategory?: string | null
-  notes?: string | null
 } | null | undefined): boolean {
   if (!t) return false
-  return !!(
-    t.needs_review ||
-    !t.category?.trim() ||
-    (t.category?.trim() && !t.subcategory?.trim()) ||
-    !t.notes?.trim()
-  )
+  return t.needs_review === true
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -12,6 +12,8 @@ from db.models import UserPreferences
 
 router = APIRouter(tags=["preferences"])
 
+_VALID_AI_PROVIDERS = {"anthropic", "openai"}
+
 
 class PreferencesUpdate(BaseModel):
     theme: Optional[str] = None
@@ -78,6 +80,12 @@ async def update_preferences(
     prefs = result.scalar_one_or_none()
     if not prefs:
         raise HTTPException(status_code=404, detail="Preferences not found")
+
+    if body.ai_provider and body.ai_provider not in _VALID_AI_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ai_provider '{body.ai_provider}'. Must be one of: {sorted(_VALID_AI_PROVIDERS)}",
+        )
 
     update_data = body.model_dump(exclude_none=True)
     for field, value in update_data.items():
