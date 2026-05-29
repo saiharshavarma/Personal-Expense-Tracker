@@ -4,7 +4,7 @@ import {
   BrainCircuit, TrendingDown, TrendingUp, Sparkles, Shield,
   AlertTriangle, CheckCircle2, Loader2, RefreshCw, Settings,
   Target, Lightbulb, ListChecks, Lock,
-  ChevronDown, ChevronUp, Zap,
+  ChevronDown, ChevronUp, Zap, Eye, EyeOff,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -271,6 +271,7 @@ function OptInGate({ hasKey }: { hasKey: boolean }) {
 
 export function FinanceAdvisor() {
   const [range, setRange] = useState<DateRange>(defaultRange)
+  const [excludeReimbursable, setExcludeReimbursable] = useState(true)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AdvisorResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -288,6 +289,7 @@ export function FinanceAdvisor() {
       const res = await api.post<AdvisorResponse>('/ai/advisor', {
         date_from: range.date_from,
         date_to: range.date_to,
+        exclude_reimbursable: excludeReimbursable,
       })
       setResult(res.data)
     } catch (err: any) {
@@ -295,7 +297,7 @@ export function FinanceAdvisor() {
     } finally {
       setLoading(false)
     }
-  }, [range])
+  }, [range, excludeReimbursable])
 
   const advice = result?.advice
 
@@ -337,6 +339,23 @@ export function FinanceAdvisor() {
                 onChange={r => { setRange(r); setResult(null) }}
               />
             </div>
+
+            <Button
+              variant={excludeReimbursable ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => { setExcludeReimbursable(v => !v); setResult(null) }}
+              className={[
+                'gap-1.5 h-9 text-xs',
+                excludeReimbursable ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500' : '',
+              ].filter(Boolean).join(' ')}
+              title={excludeReimbursable
+                ? 'Reimbursable transactions excluded — click to include them'
+                : 'All transactions included — click to exclude reimbursable'}
+            >
+              {excludeReimbursable
+                ? <><Eye className="w-3.5 h-3.5" /> Include Reimbursable</>
+                : <><EyeOff className="w-3.5 h-3.5" /> Excl. Reimbursable</>}
+            </Button>
 
             <div className="flex-1" />
 
@@ -435,9 +454,14 @@ export function FinanceAdvisor() {
                 className="space-y-4"
               >
                 {/* Period label */}
-                <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
                   <Zap className="w-3.5 h-3.5 text-primary" />
                   Strategy for <span className="font-medium text-foreground">{range.label}</span>
+                  {excludeReimbursable && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-medium">
+                      Reimbursable excluded
+                    </span>
+                  )}
                   {prefs && (
                     <span className="ml-auto">
                       Powered by {prefs.ai_provider === 'openai' ? 'GPT-4o' : 'Claude Sonnet'}

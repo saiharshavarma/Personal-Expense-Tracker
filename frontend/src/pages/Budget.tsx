@@ -45,7 +45,7 @@ interface BudgetRow {
   net_personal: number
   remaining: number
   pct_used: number
-  status: 'safe' | 'watch' | 'over'
+  status: 'safe' | 'watch' | 'over' | 'unbudgeted'
 }
 
 interface NWSBucket {
@@ -80,10 +80,11 @@ const STATUS_CONFIG = {
   safe: { label: 'Safe', className: 'bg-green-500/15 text-green-700 dark:text-green-400', bar: 'bg-green-500' },
   watch: { label: 'Watch', className: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400', bar: 'bg-yellow-500' },
   over: { label: 'Over', className: 'bg-destructive/15 text-destructive', bar: 'bg-destructive' },
+  unbudgeted: { label: 'No budget', className: 'bg-muted text-muted-foreground', bar: 'bg-muted-foreground' },
 }
 
 function StatusBadge({ status }: { status: BudgetRow['status'] }) {
-  const cfg = STATUS_CONFIG[status]
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.unbudgeted
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cfg.className}`}>
       {cfg.label}
@@ -625,7 +626,7 @@ export function Budget() {
 
             <AnimatePresence initial={false}>
               {rows.map(row => {
-                const barColor = STATUS_CONFIG[row.status].bar
+                const barColor = (STATUS_CONFIG[row.status] ?? STATUS_CONFIG.unbudgeted).bar
                 const rowKey = `${row.category}|${row.subcategory ?? ''}`
                 return (
                   <motion.div

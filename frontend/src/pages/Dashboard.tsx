@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   TrendingUp, TrendingDown, DollarSign,
   CreditCard, RefreshCw, AlertCircle, ArrowUpRight, ArrowDownRight,
-  Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target, Eye, EyeOff,
+  Upload, BarChart2, Brain, Sparkles, CheckCircle2, Zap, Heart, Target, Eye, EyeOff, ShieldAlert, Wallet,
 } from 'lucide-react'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
 import {
@@ -401,6 +401,129 @@ function SpendVelocityWidget({ month, year, excludeReimbursable }: { month: numb
   )
 }
 
+interface DashboardSignals {
+  projected_spend: number
+  median_monthly_spend: number | null
+  spend_anomaly_pct: number | null
+  fixed_commitments: number
+  fixed_income_pct: number | null
+  discretionary_after_fixed: number | null
+  budget_risk: Array<{ category: string; subcategory: string | null; over_by: number; projected: number; budget: number }>
+  category_drift: Array<{ category: string; delta: number; pct_change: number }>
+  merchant_creep: Array<{ merchant: string; delta: number; pct_change: number }>
+  review_count: number
+  risk_level: 'low' | 'medium' | 'high'
+  risk_score: number
+}
+
+function SignalSummaryWidget({ month, year, excludeReimbursable }: { month: number; year: number; excludeReimbursable: boolean }) {
+  const [data, setData] = useState<DashboardSignals | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/decision-signals?month=${month}&year=${year}&months=6&exclude_reimbursable=${excludeReimbursable}`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [month, year, excludeReimbursable])
+
+  const topItems = data ? [
+    ...data.budget_risk.slice(0, 1).map(r => ({ label: `${r.category}${r.subcategory ? ` / ${r.subcategory}` : ''}`, detail: `${formatCurrency(r.over_by)} projected over budget`, tone: 'text-red-500' })),
+    ...data.category_drift.slice(0, 1).map(r => ({ label: r.category, detail: `${formatCurrency(r.delta)} above normal category spend`, tone: 'text-amber-500' })),
+    ...data.merchant_creep.slice(0, 1).map(r => ({ label: r.merchant, detail: `${formatCurrency(r.delta)} above normal merchant spend`, tone: 'text-blue-500' })),
+  ].slice(0, 3) : []
+
+  return (
+    <Card className="h-full">
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className={cn(
+            'w-7 h-7 rounded-lg flex items-center justify-center',
+            data?.risk_level === 'high' ? 'bg-red-500/10' : data?.risk_level === 'medium' ? 'bg-amber-500/10' : 'bg-green-500/10',
+          )}>
+            <ShieldAlert className={cn('w-3.5 h-3.5', data?.risk_level === 'high' ? 'text-red-500' : data?.risk_level === 'medium' ? 'text-amber-500' : 'text-green-500')} />
+          </div>
+          <p className="text-xs font-medium">Attention Queue</p>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-4/5" />
+          </div>
+        ) : data ? (
+          <>
+            <div className="flex items-baseline gap-2">
+              <p className="text-xl font-bold capitalize">{data.risk_level}</p>
+              <span className="text-xs text-muted-foreground">{data.risk_score}/100 risk</span>
+            </div>
+            {topItems.length ? (
+              <div className="mt-3 space-y-2">
+                {topItems.map((item, i) => (
+                  <div key={i} className="border-l-2 border-border pl-2">
+                    <p className="text-xs font-medium truncate">{item.label}</p>
+                    <p className={cn('text-[10px]', item.tone)}>{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-2">No material drift, budget breakout, or merchant creep detected.</p>
+            )}
+          </>
+        ) : <p className="text-sm text-muted-foreground">—</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+function MonthEndCushionWidget({ month, year, income, excludeReimbursable }: { month: number; year: number; income: number; excludeReimbursable: boolean }) {
+  const [data, setData] = useState<DashboardSignals | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/decision-signals?month=${month}&year=${year}&months=6&exclude_reimbursable=${excludeReimbursable}`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [month, year, excludeReimbursable])
+
+  const cushion = data ? income - data.projected_spend : null
+  const isShortfall = cushion != null && cushion < 0
+
+  return (
+    <Card className="h-full">
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', isShortfall ? 'bg-red-500/10' : 'bg-green-500/10')}>
+            <Wallet className={cn('w-3.5 h-3.5', isShortfall ? 'text-red-500' : 'text-green-500')} />
+          </div>
+          <p className="text-xs font-medium">Month-end Cushion</p>
+        </div>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="h-2.5 w-36" />
+          </div>
+        ) : data && cushion != null ? (
+          <>
+            <p className={cn('text-xl font-bold', isShortfall ? 'text-red-500' : 'text-green-600 dark:text-green-400')}>
+              {cushion >= 0 ? '+' : ''}{formatCurrency(cushion)}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Income minus projected spend of {formatCurrency(data.projected_spend)}.
+            </p>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Fixed commitments: {formatCurrency(data.fixed_commitments)}
+            </p>
+          </>
+        ) : <p className="text-sm text-muted-foreground">Import income to estimate cushion.</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
 // ── Chart theme tokens ────────────────────────────────────────────────────────
 const DASH_TICK_SM  = { fontSize: 10, fill: 'hsl(var(--muted-foreground))' }
 const DASH_GRID     = 'hsl(var(--border))'
@@ -704,7 +827,7 @@ export function Dashboard() {
 
       {/* ── Insights row: projection / health / velocity ── */}
       <motion.div
-        className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4"
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.22 }}
@@ -712,6 +835,8 @@ export function Dashboard() {
         <ProjectionWidget month={month} year={year} />
         <HealthScoreWidget month={month} year={year} excludeReimbursable={excludeReimbursable} />
         <SpendVelocityWidget month={month} year={year} excludeReimbursable={excludeReimbursable} />
+        <SignalSummaryWidget month={month} year={year} excludeReimbursable={excludeReimbursable} />
+        <MonthEndCushionWidget month={month} year={year} income={summary?.income ?? 0} excludeReimbursable={excludeReimbursable} />
       </motion.div>
 
       {/* ── Getting started (shown when no transactions yet) ── */}

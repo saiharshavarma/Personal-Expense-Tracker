@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   MessageSquare, Send, Shield, Sparkles, TrendingUp, PieChart,
-  AlertTriangle, ChevronRight, Lock, Bot, User, Loader2, Settings,
+  AlertTriangle, ChevronRight, Lock, Bot, User, Loader2, Settings, Eye, EyeOff,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -341,6 +341,7 @@ export function AskAI() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isTyping, setIsTyping] = useState(false)
   const [range, setRange] = useState<DateRange>(defaultRange)
+  const [excludeReimbursable, setExcludeReimbursable] = useState(true)
   const chatBottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -375,6 +376,7 @@ export function AskAI() {
         question: q,
         date_from: range.date_from,
         date_to: range.date_to,
+        exclude_reimbursable: excludeReimbursable,
       })
       const answer = res.data.answer ?? 'No response received.'
       setMessages(prev => [...prev, {
@@ -433,13 +435,29 @@ export function AskAI() {
       ) : (
         <AnimatePresence mode="wait">
           <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-            {/* Date range selector */}
+            {/* Date range + reimbursable toggle */}
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs font-medium text-muted-foreground">Analyzing:</span>
               <DateRangePicker value={range} onChange={r => { setRange(r); setMessages([]) }} />
+              <Button
+                variant={excludeReimbursable ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => { setExcludeReimbursable(v => !v); setMessages([]) }}
+                className={[
+                  'gap-1.5 h-8 text-xs',
+                  excludeReimbursable ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500' : '',
+                ].filter(Boolean).join(' ')}
+                title={excludeReimbursable
+                  ? 'Reimbursable transactions excluded — click to include them'
+                  : 'All transactions included — click to exclude reimbursable'}
+              >
+                {excludeReimbursable
+                  ? <><Eye className="w-3.5 h-3.5" /> Include Reimbursable</>
+                  : <><EyeOff className="w-3.5 h-3.5" /> Excl. Reimbursable</>}
+              </Button>
               {messages.length === 0 && (
                 <span className="text-xs text-muted-foreground hidden sm:inline">
-                  — change period to re-focus the AI context
+                  — change period or filters to re-focus the AI context
                 </span>
               )}
             </div>
@@ -512,7 +530,7 @@ export function AskAI() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Powered by {prefs?.ai_provider === 'openai' ? 'OpenAI GPT-4o' : 'Claude Sonnet'} · {range.label} · Aggregated data only
+                  Powered by {prefs?.ai_provider === 'openai' ? 'OpenAI GPT-4o' : 'Claude Sonnet'} · {range.label}{excludeReimbursable ? ' · Reimbursable excluded' : ''} · Aggregated data only
                 </p>
               </CardContent>
             </Card>

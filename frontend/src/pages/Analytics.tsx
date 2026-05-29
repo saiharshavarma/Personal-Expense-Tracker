@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, ComposedChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, ShieldAlert, TrendingUp } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -478,6 +478,93 @@ function BudgetTrendChart({ months, excludeReimbursable }: { months: number; exc
   )
 }
 
+function CashflowPaceChart({ month, year, months, excludeReimbursable }: { month: number; year: number; months: number; excludeReimbursable: boolean }) {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/cashflow-pace?month=${month}&year=${year}&months=${Math.max(3, months)}&exclude_reimbursable=${excludeReimbursable}`)
+      .then(r => setData(r.data.data ?? []))
+      .catch(() => setData([]))
+      .finally(() => setLoading(false))
+  }, [month, year, months, excludeReimbursable])
+
+  if (loading) return <Skeleton className="w-full" style={{ height: 224 }} />
+  if (!data.length) return <EmptyChart height={224} />
+
+  return (
+    <ResponsiveContainer width="100%" height={224}>
+      <AreaChart data={data} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="paceActual" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+            <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+          </linearGradient>
+          <linearGradient id="paceTypical" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#64748b" stopOpacity={0.16} />
+            <stop offset="95%" stopColor="#64748b" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="day" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false}
+          tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
+        <Tooltip content={<CurrencyTooltip />} />
+        <Area dataKey="typical_cumulative" name="Typical pace" stroke="#64748b" strokeWidth={2} fill="url(#paceTypical)" dot={false} connectNulls />
+        <Area dataKey="actual_cumulative" name="Actual pace" stroke="#ef4444" strokeWidth={2} fill="url(#paceActual)" dot={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+function FixedCommitmentTrendChart({ months, excludeReimbursable }: { months: number; excludeReimbursable: boolean }) {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/fixed-commitment-trend?months=${Math.max(3, months)}&exclude_reimbursable=${excludeReimbursable}`)
+      .then(r => setData(r.data.map((d: any) => ({ ...d, label: ml(d.year, d.month) }))))
+      .catch(() => setData([]))
+      .finally(() => setLoading(false))
+  }, [months, excludeReimbursable])
+
+  if (loading) return <Skeleton className="w-full" style={{ height: 224 }} />
+  if (!data.length) return <EmptyChart height={224} />
+
+  return (
+    <ResponsiveContainer width="100%" height={224}>
+      <ComposedChart data={data} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} strokeOpacity={0.4} />
+        <XAxis dataKey="label" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+        <YAxis yAxisId="left" tick={TICK_STYLE} tickLine={false} axisLine={false}
+          tickFormatter={(v) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
+        <YAxis yAxisId="right" orientation="right" tick={TICK_STYLE} tickLine={false} axisLine={false}
+          tickFormatter={(v) => `${v}%`} width={36} />
+        <Tooltip
+          cursor={{ fill: 'transparent' }}
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null
+            const d = payload[0].payload
+            return (
+              <div className="bg-popover text-popover-foreground border border-border rounded-lg px-3 py-2 shadow-lg text-xs z-50">
+                <p className="font-semibold mb-1">{label}</p>
+                <p>Fixed: <span className="font-medium">{formatCurrency(d.fixed)}</span></p>
+                <p>Income: <span className="font-medium">{formatCurrency(d.income)}</span></p>
+                <p className="text-muted-foreground">Lock: {d.fixed_income_pct == null ? 'No income' : `${d.fixed_income_pct}%`}</p>
+              </div>
+            )
+          }}
+        />
+        <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+        <Bar yAxisId="left" dataKey="fixed" name="Fixed commitments" fill="#a855f7" radius={[3, 3, 0, 0]} maxBarSize={28} />
+        <Line yAxisId="right" dataKey="fixed_income_pct" name="Income lock %" stroke="#f97316" strokeWidth={2} dot={false} connectNulls />
+      </ComposedChart>
+    </ResponsiveContainer>
+  )
+}
+
 function ReimbursementChart() {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -514,6 +601,285 @@ function ReimbursementChart() {
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+  )
+}
+
+interface DecisionSignals {
+  selected_spend: number
+  projected_spend: number
+  median_monthly_spend: number | null
+  spend_anomaly_pct: number | null
+  volatility_pct: number | null
+  fixed_commitments: number
+  fixed_income_pct: number | null
+  discretionary_after_fixed: number | null
+  budget_risk: Array<{
+    category: string
+    subcategory: string | null
+    actual: number
+    projected: number
+    budget: number
+    over_by: number
+    projected_pct: number
+  }>
+  category_drift: Array<{
+    category: string
+    current: number
+    baseline: number
+    delta: number
+    pct_change: number
+  }>
+  merchant_creep: Array<{
+    merchant: string
+    current: number
+    baseline: number
+    delta: number
+    pct_change: number
+    transactions: number
+  }>
+  review_count: number
+  risk_level: 'low' | 'medium' | 'high'
+  risk_score: number
+}
+
+function pctLabel(value: number | null | undefined) {
+  return value == null ? 'Not enough history' : `${value > 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function RiskMeter({ value }: { value: number }) {
+  return (
+    <div className="h-2 rounded-full bg-muted overflow-hidden">
+      <div
+        className={cn(
+          'h-full rounded-full',
+          value >= 75 ? 'bg-destructive' : value >= 25 ? 'bg-amber-500' : 'bg-green-500',
+        )}
+        style={{ width: `${Math.max(8, Math.min(100, value))}%` }}
+      />
+    </div>
+  )
+}
+
+function SignalMetricCard({
+  title,
+  value,
+  detail,
+  tone,
+}: {
+  title: string
+  value: string
+  detail: string
+  tone: 'good' | 'warn' | 'bad' | 'info'
+}) {
+  const color = {
+    good: 'text-green-600 dark:text-green-400',
+    warn: 'text-amber-600 dark:text-amber-400',
+    bad: 'text-destructive',
+    info: 'text-blue-600 dark:text-blue-400',
+  }[tone]
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <p className="text-xs font-medium text-muted-foreground">{title}</p>
+        <p className={cn('mt-2 text-2xl font-semibold tabular-nums', color)}>{value}</p>
+        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{detail}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function RankedSignalList({
+  title,
+  empty,
+  rows,
+  render,
+}: {
+  title: string
+  empty: string
+  rows: any[]
+  render: (row: any, max: number) => React.ReactNode
+}) {
+  const max = Math.max(...rows.map((r) => Math.abs(r.delta ?? r.over_by ?? 0)), 1)
+
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-5">
+        <CardTitle className="text-sm font-medium leading-none">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="pb-4 px-5">
+        {!rows.length ? (
+          <div className="flex items-center justify-center h-32 text-xs text-muted-foreground text-center">
+            {empty}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {rows.map((row, i) => (
+              <div key={i}>{render(row, max)}</div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function DecisionSignalsPanel({
+  month,
+  year,
+  months,
+  excludeReimbursable,
+}: {
+  month: number
+  year: number
+  months: number
+  excludeReimbursable: boolean
+}) {
+  const [data, setData] = useState<DecisionSignals | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/analytics/decision-signals?month=${month}&year=${year}&months=${Math.max(3, months)}&exclude_reimbursable=${excludeReimbursable}`)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [month, year, months, excludeReimbursable])
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-32" />)}
+      </div>
+    )
+  }
+  if (!data) return <EmptyChart height={180} />
+
+  const anomalyTone = data.spend_anomaly_pct == null || data.spend_anomaly_pct <= 10
+    ? 'good'
+    : data.spend_anomaly_pct <= 25 ? 'warn' : 'bad'
+  const fixedTone = data.fixed_income_pct == null || data.fixed_income_pct <= 35
+    ? 'good'
+    : data.fixed_income_pct <= 50 ? 'warn' : 'bad'
+  const volatilityTone = data.volatility_pct == null || data.volatility_pct <= 20
+    ? 'good'
+    : data.volatility_pct <= 35 ? 'warn' : 'bad'
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'flex h-10 w-10 items-center justify-center rounded-full',
+                data.risk_level === 'high'
+                  ? 'bg-destructive/10 text-destructive'
+                  : data.risk_level === 'medium'
+                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                    : 'bg-green-500/10 text-green-600 dark:text-green-400',
+              )}>
+                {data.risk_level === 'high' ? <ShieldAlert className="w-5 h-5" /> : <TrendingUp className="w-5 h-5" />}
+              </div>
+              <div>
+                <p className="text-sm font-semibold capitalize">{data.risk_level} attention month</p>
+                <p className="text-xs text-muted-foreground">
+                  Combines spend anomaly, fixed commitments, budget risk, volatility, and review backlog.
+                </p>
+              </div>
+            </div>
+            <div className="min-w-40">
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>Risk score</span>
+                <span>{data.risk_score}/100</span>
+              </div>
+              <RiskMeter value={data.risk_score} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <SignalMetricCard
+          title="Spend Anomaly"
+          value={pctLabel(data.spend_anomaly_pct)}
+          detail={`Projected ${formatCurrency(data.projected_spend)} vs normal ${data.median_monthly_spend ? formatCurrency(data.median_monthly_spend) : 'baseline unavailable'}.`}
+          tone={anomalyTone}
+        />
+        <SignalMetricCard
+          title="Fixed-Cost Lock"
+          value={data.fixed_income_pct == null ? 'No income' : `${data.fixed_income_pct.toFixed(1)}%`}
+          detail={`${formatCurrency(data.fixed_commitments)} is already committed before flexible spending.`}
+          tone={fixedTone}
+        />
+        <SignalMetricCard
+          title="Spend Volatility"
+          value={data.volatility_pct == null ? 'Not enough history' : `${data.volatility_pct.toFixed(1)}%`}
+          detail="Higher volatility makes month-end planning and budget timing harder."
+          tone={volatilityTone}
+        />
+        <SignalMetricCard
+          title="Review Backlog"
+          value={String(data.review_count)}
+          detail="Unreviewed transactions weaken categories, budgets, and AI learning quality."
+          tone={data.review_count > 10 ? 'warn' : 'good'}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <RankedSignalList
+          title="Budget Breakout Risk"
+          empty="No budget categories are projected to break."
+          rows={data.budget_risk}
+          render={(row, max) => (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium truncate">{row.category}{row.subcategory ? ` / ${row.subcategory}` : ''}</span>
+                <span className="text-destructive font-semibold tabular-nums">+{formatCurrency(row.over_by)}</span>
+              </div>
+              <RiskMeter value={Math.min(100, Math.abs(row.over_by) / max * 100)} />
+              <p className="text-xs text-muted-foreground">
+                Projected {formatCurrency(row.projected)} on a {formatCurrency(row.budget)} budget.
+              </p>
+            </div>
+          )}
+        />
+        <RankedSignalList
+          title="Category Drift"
+          empty="No category is materially above its recent baseline."
+          rows={data.category_drift}
+          render={(row, max) => (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium truncate">{row.category}</span>
+                <span className="text-amber-600 dark:text-amber-400 font-semibold tabular-nums">+{formatCurrency(row.delta)}</span>
+              </div>
+              <RiskMeter value={Math.min(100, Math.abs(row.delta) / max * 100)} />
+              <p className="text-xs text-muted-foreground">
+                {pctLabel(row.pct_change)} vs recent average of {formatCurrency(row.baseline)}.
+              </p>
+            </div>
+          )}
+        />
+        <RankedSignalList
+          title="Merchant Creep"
+          empty="No repeat merchant is rising sharply above normal."
+          rows={data.merchant_creep}
+          render={(row, max) => (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium truncate">{row.merchant}</span>
+                <span className="text-blue-600 dark:text-blue-400 font-semibold tabular-nums">+{formatCurrency(row.delta)}</span>
+              </div>
+              <RiskMeter value={Math.min(100, Math.abs(row.delta) / max * 100)} />
+              <p className="text-xs text-muted-foreground">
+                {row.transactions} transactions, {pctLabel(row.pct_change)} above normal.
+              </p>
+            </div>
+          )}
+        />
+      </div>
+    </div>
   )
 }
 
@@ -614,6 +980,16 @@ export function Analytics() {
       )}
 
       <div className="space-y-8">
+        {/* ── Decision Signals ── */}
+        <Section title="Decision Signals" emoji="🎯">
+          <DecisionSignalsPanel
+            month={month}
+            year={year}
+            months={trendMonths}
+            excludeReimbursable={excludeReimbursable}
+          />
+        </Section>
+
         {/* ── Spending Trends ── */}
         <Section title="Spending Trends" emoji="📈">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -669,6 +1045,12 @@ export function Analytics() {
         {/* ── Spending Behavior ── */}
         <Section title="Spending Behavior" emoji="🗓️">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ChartCard title="Cashflow Pace" subtitle={`${monthName(month)} ${year} vs your trailing ${trendMonths}-month pace`}>
+              <CashflowPaceChart month={month} year={year} months={trendMonths} excludeReimbursable={excludeReimbursable} />
+            </ChartCard>
+            <ChartCard title="Fixed-Cost Lock Trend" subtitle={`Recurring/fixed commitments as income pressure`}>
+              <FixedCommitmentTrendChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
+            </ChartCard>
             <ChartCard title="Spend by Day of Week" subtitle={`Last ${trendMonths} months — intensity shows relative spend`}>
               <DayOfWeekChart months={trendMonths} excludeReimbursable={excludeReimbursable} />
             </ChartCard>

@@ -43,6 +43,25 @@ def _income_filter():
     )
 
 
+def _month_key(year: int, month: int) -> str:
+    return f"{year}-{month:02d}"
+
+
+def _median(values: list[float]) -> Optional[float]:
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2
+
+
+def _avg(values: list[float]) -> Optional[float]:
+    vals = [v for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
 @router.get("/spend-trends")
 async def spend_trends(
     months: int = Query(6, ge=1, le=36),
@@ -755,3 +774,436 @@ async def spend_velocity(
         "days_elapsed": days_elapsed,
         "month_total": round(month_total, 2),
     }
+
+
+@router.get("/decision-signals")
+async def decision_signals(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    months: int = Query(6, ge=3, le=24),
+    exclude_reimbursable: bool = Query(False),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Higher-signal analytics for action, not just description:
+    - Is this month abnormal versus the user's own baseline?
+    - Which categories/merchants are expanding beyond their normal footprint?
+    - How much income is already locked by recurring/fixed commitments?
+    - Which budgets are likely to break at the current pace?
+    """
+    import calendar
+    import math
+    from dateutil.relativedelta import relativedelta
+
+    today = date.today()
+    m = month or today.month
+    y = year or today.year
+    selected_start = date(y, m, 1)
+    history_start = selected_start - relativedelta(months=months)
+    next_month = selected_start + relativedelta(months=1)
+    reimb = _reimb_filters(exclude_reimbursable)
+
+    selected_days_elapsed = (
+        today.day if y == today.year and m == today.month
+        else calendar.monthrange(y, m)[1]
+    )
+    selected_days_total = calendar.monthrange(y, m)[1]
+    pace_factor = selected_days_total / selected_days_elapsed if selected_days_elapsed else 1
+
+    income = float((await db.execute(
+        select(func.sum(Transaction.amount))
+        .where(
+            Transaction.direction == "credit",
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            _income_filter(),
+        )
+    )).scalar() or 0)
+
+    selected_expenses = float((await db.execute(
+        select(func.sum(Transaction.amount))
+        .where(
+            Transaction.direction == "debit",
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        )
+    )).scalar() or 0)
+
+    monthly_rows = (await db.execute(
+        select(
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.date >= history_start,
+            Transaction.date < selected_start,
+            *reimb,
+        )
+        .group_by("year", "month")
+        .order_by("year", "month")
+    )).all()
+    monthly_totals = [float(r.total or 0) for r in monthly_rows if float(r.total or 0) > 0]
+    median_month = _median(monthly_totals)
+    avg_month = _avg(monthly_totals)
+    volatility_pct = None
+    if avg_month and len(monthly_totals) >= 2:
+        variance = sum((v - avg_month) ** 2 for v in monthly_totals) / len(monthly_totals)
+        volatility_pct = math.sqrt(variance) / avg_month * 100 if avg_month else None
+
+    projected_expenses = selected_expenses * pace_factor
+    anomaly_pct = (
+        (projected_expenses - median_month) / median_month * 100
+        if median_month else None
+    )
+
+    selected_cat_rows = (await db.execute(
+        select(
+            Transaction.category,
+            func.sum(Transaction.amount).label("total"),
+            func.count(Transaction.id).label("count"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.category.isnot(None),
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        )
+        .group_by(Transaction.category)
+    )).all()
+    selected_cat = {
+        r.category: {"total": float(r.total or 0), "count": r.count}
+        for r in selected_cat_rows
+    }
+
+    hist_cat_rows = (await db.execute(
+        select(
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            Transaction.category,
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.category.isnot(None),
+            Transaction.date >= history_start,
+            Transaction.date < selected_start,
+            *reimb,
+        )
+        .group_by("year", "month", Transaction.category)
+    )).all()
+    hist_cat: dict[str, list[float]] = {}
+    for r in hist_cat_rows:
+        hist_cat.setdefault(r.category, []).append(float(r.total or 0))
+
+    category_drift = []
+    for cat, cur in selected_cat.items():
+        hist_avg = _avg(hist_cat.get(cat, []))
+        if not hist_avg or hist_avg < 25:
+            continue
+        delta = cur["total"] - hist_avg
+        pct = delta / hist_avg * 100
+        if delta > 20 and pct > 15:
+            category_drift.append({
+                "category": cat,
+                "current": round(cur["total"], 2),
+                "baseline": round(hist_avg, 2),
+                "delta": round(delta, 2),
+                "pct_change": round(pct, 1),
+            })
+    category_drift.sort(key=lambda x: x["delta"], reverse=True)
+
+    selected_merchant_rows = (await db.execute(
+        select(
+            Transaction.merchant,
+            func.sum(Transaction.amount).label("total"),
+            func.count(Transaction.id).label("count"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.merchant.isnot(None),
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        )
+        .group_by(Transaction.merchant)
+    )).all()
+    selected_merchants = {
+        r.merchant: {"total": float(r.total or 0), "count": r.count}
+        for r in selected_merchant_rows
+    }
+
+    hist_merchant_rows = (await db.execute(
+        select(
+            Transaction.merchant,
+            func.sum(Transaction.amount).label("total"),
+            func.count(func.distinct(func.date_trunc("month", Transaction.date))).label("active_months"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.merchant.isnot(None),
+            Transaction.date >= history_start,
+            Transaction.date < selected_start,
+            *reimb,
+        )
+        .group_by(Transaction.merchant)
+    )).all()
+    hist_merchants = {
+        r.merchant: {
+            "baseline": float(r.total or 0) / r.active_months if r.active_months else 0,
+            "active_months": r.active_months,
+        }
+        for r in hist_merchant_rows
+    }
+
+    merchant_creep = []
+    for merchant, cur in selected_merchants.items():
+        hist = hist_merchants.get(merchant)
+        if not hist or hist["active_months"] < 2 or hist["baseline"] < 15:
+            continue
+        delta = cur["total"] - hist["baseline"]
+        pct = delta / hist["baseline"] * 100
+        if delta > 15 and pct > 25:
+            merchant_creep.append({
+                "merchant": merchant,
+                "current": round(cur["total"], 2),
+                "baseline": round(hist["baseline"], 2),
+                "delta": round(delta, 2),
+                "pct_change": round(pct, 1),
+                "transactions": cur["count"],
+            })
+    merchant_creep.sort(key=lambda x: x["delta"], reverse=True)
+
+    fixed_total = float((await db.execute(
+        select(func.sum(Transaction.amount))
+        .where(
+            Transaction.direction == "debit",
+            or_(Transaction.is_recurring == True, Transaction.fixed_variable == "fixed"),
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        )
+    )).scalar() or 0)
+    fixed_income_pct = fixed_total / income * 100 if income else None
+    discretionary_after_fixed = income - fixed_total if income else None
+
+    budget_rows = (await db.execute(
+        select(Budget.category, Budget.subcategory, Budget.budget_amount)
+        .where(Budget.month == m, Budget.year == y)
+    )).all()
+    budget_risk = []
+    for b in budget_rows:
+        filters = [
+            Transaction.direction == "debit",
+            Transaction.category == b.category,
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        ]
+        if b.subcategory:
+            filters.append(Transaction.subcategory == b.subcategory)
+        actual = float((await db.execute(
+            select(func.sum(Transaction.net_personal_cost)).where(*filters)
+        )).scalar() or 0)
+        projected = actual * pace_factor
+        budget = float(b.budget_amount or 0)
+        if budget > 0 and projected > budget:
+            budget_risk.append({
+                "category": b.category,
+                "subcategory": b.subcategory,
+                "actual": round(actual, 2),
+                "projected": round(projected, 2),
+                "budget": round(budget, 2),
+                "over_by": round(projected - budget, 2),
+                "used_pct": round(actual / budget * 100, 1),
+                "projected_pct": round(projected / budget * 100, 1),
+            })
+    budget_risk.sort(key=lambda x: x["over_by"], reverse=True)
+
+    review_count = (await db.execute(
+        select(func.count(Transaction.id))
+        .where(
+            Transaction.needs_review == True,
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+        )
+    )).scalar() or 0
+
+    high_risk_count = sum([
+        1 if anomaly_pct is not None and anomaly_pct > 20 else 0,
+        1 if fixed_income_pct is not None and fixed_income_pct > 50 else 0,
+        1 if len(budget_risk) >= 3 else 0,
+        1 if volatility_pct is not None and volatility_pct > 35 else 0,
+        1 if review_count > 10 else 0,
+    ])
+
+    return {
+        "month": m,
+        "year": y,
+        "history_months": months,
+        "selected_spend": round(selected_expenses, 2),
+        "projected_spend": round(projected_expenses, 2),
+        "median_monthly_spend": round(median_month, 2) if median_month is not None else None,
+        "spend_anomaly_pct": round(anomaly_pct, 1) if anomaly_pct is not None else None,
+        "volatility_pct": round(volatility_pct, 1) if volatility_pct is not None else None,
+        "fixed_commitments": round(fixed_total, 2),
+        "fixed_income_pct": round(fixed_income_pct, 1) if fixed_income_pct is not None else None,
+        "discretionary_after_fixed": round(discretionary_after_fixed, 2) if discretionary_after_fixed is not None else None,
+        "budget_risk": budget_risk[:6],
+        "category_drift": category_drift[:6],
+        "merchant_creep": merchant_creep[:6],
+        "review_count": review_count,
+        "risk_level": "high" if high_risk_count >= 3 else "medium" if high_risk_count >= 1 else "low",
+        "risk_score": min(100, high_risk_count * 25),
+    }
+
+
+@router.get("/cashflow-pace")
+async def cashflow_pace(
+    month: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    months: int = Query(6, ge=3, le=24),
+    exclude_reimbursable: bool = Query(False),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import calendar
+    from dateutil.relativedelta import relativedelta
+
+    today = date.today()
+    m = month or today.month
+    y = year or today.year
+    selected_start = date(y, m, 1)
+    history_start = selected_start - relativedelta(months=months)
+    days_in_month = calendar.monthrange(y, m)[1]
+    reimb = _reimb_filters(exclude_reimbursable)
+
+    selected_rows = (await db.execute(
+        select(
+            extract("day", Transaction.date).label("day"),
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            extract("month", Transaction.date) == m,
+            extract("year", Transaction.date) == y,
+            *reimb,
+        )
+        .group_by("day")
+        .order_by("day")
+    )).all()
+    selected_by_day = {int(r.day): float(r.total or 0) for r in selected_rows}
+
+    hist_rows = (await db.execute(
+        select(
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            extract("day", Transaction.date).label("day"),
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            Transaction.direction == "debit",
+            Transaction.date >= history_start,
+            Transaction.date < selected_start,
+            *reimb,
+        )
+        .group_by("year", "month", "day")
+    )).all()
+
+    hist_months: dict[tuple[int, int], dict[int, float]] = {}
+    for r in hist_rows:
+        hist_months.setdefault((int(r.year), int(r.month)), {})[int(r.day)] = float(r.total or 0)
+
+    cumulative = 0.0
+    data = []
+    for day in range(1, days_in_month + 1):
+        cumulative += selected_by_day.get(day, 0.0)
+        hist_cums = []
+        for (hy, hm), day_map in hist_months.items():
+            hist_days = calendar.monthrange(hy, hm)[1]
+            comparable_day = min(day, hist_days)
+            hist_cums.append(sum(v for d, v in day_map.items() if d <= comparable_day))
+        typical = _avg(hist_cums)
+        data.append({
+            "day": day,
+            "actual_cumulative": round(cumulative, 2),
+            "typical_cumulative": round(typical, 2) if typical is not None else None,
+        })
+
+    days_elapsed = today.day if y == today.year and m == today.month else days_in_month
+    current_total = sum(v for d, v in selected_by_day.items() if d <= days_elapsed)
+    projected_total = current_total / days_elapsed * days_in_month if days_elapsed else 0
+
+    return {
+        "month": m,
+        "year": y,
+        "days_elapsed": days_elapsed,
+        "days_in_month": days_in_month,
+        "current_total": round(current_total, 2),
+        "projected_total": round(projected_total, 2),
+        "data": data,
+    }
+
+
+@router.get("/fixed-commitment-trend")
+async def fixed_commitment_trend(
+    months: int = Query(6, ge=3, le=24),
+    exclude_reimbursable: bool = Query(False),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import calendar
+    from dateutil.relativedelta import relativedelta
+
+    today = date.today()
+    start = today.replace(day=1) - relativedelta(months=months - 1)
+    reimb = _reimb_filters(exclude_reimbursable)
+
+    income_rows = (await db.execute(
+        select(
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(Transaction.date >= start, Transaction.direction == "credit", _income_filter())
+        .group_by("year", "month")
+    )).all()
+    fixed_rows = (await db.execute(
+        select(
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            func.sum(Transaction.amount).label("total"),
+        )
+        .where(
+            Transaction.date >= start,
+            Transaction.direction == "debit",
+            or_(Transaction.is_recurring == True, Transaction.fixed_variable == "fixed"),
+            *reimb,
+        )
+        .group_by("year", "month")
+    )).all()
+
+    income_by_key = {(int(r.year), int(r.month)): float(r.total or 0) for r in income_rows}
+    fixed_by_key = {(int(r.year), int(r.month)): float(r.total or 0) for r in fixed_rows}
+
+    results = []
+    cur = start
+    for _ in range(months):
+        key = (cur.year, cur.month)
+        income = income_by_key.get(key, 0.0)
+        fixed = fixed_by_key.get(key, 0.0)
+        results.append({
+            "year": cur.year,
+            "month": cur.month,
+            "income": round(income, 2),
+            "fixed": round(fixed, 2),
+            "fixed_income_pct": round(fixed / income * 100, 1) if income else None,
+            "days_in_month": calendar.monthrange(cur.year, cur.month)[1],
+        })
+        cur = cur + relativedelta(months=1)
+
+    return results
