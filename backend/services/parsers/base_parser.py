@@ -31,16 +31,27 @@ _DATE_FORMATS = [
     "%b. %d, %Y",                     # Jan. 15, 2024 (some Amex)
 ]
 
+_DATE_FORMATS_DAY_FIRST = [
+    "%d/%m/%Y", "%d-%m-%Y",          # 15/01/2024
+    "%d/%m/%y", "%d-%m-%y",          # 15/01/24
+    "%Y-%m-%d",                       # 2024-01-15
+    "%m/%d/%Y", "%m/%d/%y",          # US fallback for unambiguous mixed exports
+    "%m-%d-%Y", "%m-%d-%y",
+    "%b %d, %Y", "%b %d %Y",
+    "%B %d, %Y", "%B %d %Y",
+    "%d %b %Y", "%d %B %Y",
+    "%b. %d, %Y",
+]
+
 # Short "MM/DD" patterns that appear in some statements (assume current year)
 _SHORT_DATE_PAT = re.compile(r"^\d{1,2}/\d{1,2}$")
 
 
-def parse_date(s: str) -> Optional[date]:
-    """Try all known date formats. Returns None if none match."""
+def _parse_date_with_formats(s: str, formats: list[str], *, short_day_first: bool = False) -> Optional[date]:
     s = s.strip()
     if not s:
         return None
-    for fmt in _DATE_FORMATS:
+    for fmt in formats:
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -55,10 +66,22 @@ def parse_date(s: str) -> Optional[date]:
     if _SHORT_DATE_PAT.match(s):
         try:
             parts = s.split("/")
+            if short_day_first:
+                return date(datetime.today().year, int(parts[1]), int(parts[0]))
             return date(datetime.today().year, int(parts[0]), int(parts[1]))
         except Exception:
             pass
     return None
+
+
+def parse_date(s: str) -> Optional[date]:
+    """Try all known date formats. Returns None if none match."""
+    return _parse_date_with_formats(s, _DATE_FORMATS)
+
+
+def parse_date_dayfirst(s: str) -> Optional[date]:
+    """Parse DD/MM-style bank statement dates before US-style fallbacks."""
+    return _parse_date_with_formats(s, _DATE_FORMATS_DAY_FIRST, short_day_first=True)
 
 
 def parse_amount(s: str) -> Optional[Decimal]:
@@ -126,6 +149,7 @@ def parse_text_transactions(
     text: str,
     direction_from_sign: bool = True,
     debit_positive: bool = False,
+    dayfirst: bool = False,
 ) -> List[ParsedTransaction]:
     """
     Multi-line-aware transaction extractor for plain text extracted from PDFs.
@@ -164,7 +188,7 @@ def parse_text_transactions(
             if not all_dates or not amounts:
                 continue
 
-            txn_date = parse_date(all_dates[0])
+            txn_date = parse_date_dayfirst(all_dates[0]) if dayfirst else parse_date(all_dates[0])
             if not txn_date:
                 continue
 

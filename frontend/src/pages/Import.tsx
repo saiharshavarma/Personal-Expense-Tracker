@@ -10,9 +10,9 @@ import { TopBar } from '@/components/layout/TopBar'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { api } from '@/utils/apiClient'
+import { api, getAuthErrorMessage } from '@/utils/apiClient'
 import type { Account, ImportBatch } from '@/types'
-import { ALL_CATEGORIES } from '@/lib/categories'
+import { ALL_CATEGORIES, getSubcategories } from '@/lib/categories'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +24,7 @@ interface StagingTransaction {
   direction: 'debit' | 'credit'
   // AI suggestions
   ai_category: string | null
+  ai_subcategory: string | null
   ai_confidence: number | null
   ai_flags: string[]
   merchant: string | null
@@ -34,6 +35,7 @@ interface StagingTransaction {
   tags: string[]
   // User-editable fields (initialised from AI suggestions)
   category: string | null
+  subcategory: string | null
   skip: boolean
 }
 
@@ -108,6 +110,7 @@ interface StagingReviewProps {
 
 function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: StagingReviewProps) {
   const [editingCategory, setEditingCategory] = useState<string | null>(null)
+  const [editingSubcategory, setEditingSubcategory] = useState<string | null>(null)
 
   const included = stagedTxns.filter(t => !t.skip)
   const skipped  = stagedTxns.filter(t => t.skip)
@@ -162,6 +165,7 @@ function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: S
                   <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Direction</th>
                   <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Amount</th>
                   <th className="text-left px-2 py-2 font-medium">Category</th>
+                  <th className="text-left px-2 py-2 font-medium">Subcategory</th>
                   <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Reimb.</th>
                   <th className="text-center px-2 py-2 font-medium w-6"></th>
                 </tr>
@@ -229,7 +233,7 @@ function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: S
                             autoFocus
                             value={txn.category ?? ''}
                             onChange={e => {
-                              onUpdate(txn.temp_id, { category: e.target.value || null })
+                              onUpdate(txn.temp_id, { category: e.target.value || null, subcategory: null })
                               setEditingCategory(null)
                             }}
                             onBlur={() => setEditingCategory(null)}
@@ -254,6 +258,39 @@ function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: S
                                 {Math.round((txn.ai_confidence) * 100)}%
                               </span>
                             )}
+                          </button>
+                        )}
+                      </td>
+
+                      {/* Subcategory */}
+                      <td className="px-2 py-1.5 min-w-[140px]">
+                        {editingSubcategory === txn.temp_id ? (
+                          <select
+                            autoFocus
+                            value={txn.subcategory ?? ''}
+                            disabled={!txn.category}
+                            onChange={e => {
+                              onUpdate(txn.temp_id, { subcategory: e.target.value || null })
+                              setEditingSubcategory(null)
+                            }}
+                            onBlur={() => setEditingSubcategory(null)}
+                            className="w-full h-6 rounded border border-input bg-background px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                          >
+                            <option value="">No subcategory</option>
+                            {(txn.category ? getSubcategories(txn.category) : []).map(s => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button
+                            disabled={dimmed || !txn.category}
+                            onClick={() => setEditingSubcategory(txn.temp_id)}
+                            className="flex items-center gap-1 text-left group w-full disabled:pointer-events-none"
+                            title={txn.category ? 'Click to edit subcategory' : 'Choose a category first'}
+                          >
+                            <span className={`truncate ${txn.subcategory ? 'text-foreground' : 'text-muted-foreground/50 italic'}`}>
+                              {txn.subcategory ?? (txn.category ? 'Set subcategory' : 'Pick category first')}
+                            </span>
                           </button>
                         )}
                       </td>
@@ -371,6 +408,7 @@ function UploadTab() {
         if (entry.account_id) fd.append('account_id', entry.account_id)
         const r = await api.post<StagingResult>('/import/parse-preview', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 120000,
         })
         setFiles(prev => prev.map(e =>
           e.id === entry.id
@@ -384,10 +422,10 @@ function UploadTab() {
             : e
         ))
       } catch (err: unknown) {
-        const e2 = err as { response?: { data?: { detail?: string } } }
+        const message = getAuthErrorMessage(err)
         setFiles(prev => prev.map(e =>
           e.id === entry.id
-            ? { ...e, status: 'error', error: e2?.response?.data?.detail ?? 'Upload failed' }
+            ? { ...e, status: 'error', error: message.includes('timeout') ? 'Parsing took too long. Try again, or use a CSV export for this statement.' : message }
             : e
         ))
       }

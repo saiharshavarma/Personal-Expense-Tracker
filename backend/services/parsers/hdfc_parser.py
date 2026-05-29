@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from services.parsers.base_parser import (
     BaseParser, ParsedTransaction,
-    parse_date, parse_amount,
+    parse_date_dayfirst, parse_amount,
     extract_tables_best_effort, parse_text_transactions,
 )
 
@@ -87,7 +87,7 @@ class HDFCParser(BaseParser):
                 if "date" in date_str.lower():
                     continue
 
-                txn_date = parse_date(date_str)
+                txn_date = parse_date_dayfirst(date_str)
                 if not txn_date:
                     continue
 
@@ -131,6 +131,10 @@ class HDFCParser(BaseParser):
                     tables = extract_tables_best_effort(page)
                     for table in tables:
                         for row in table:
+                            packed = self._parse_packed_table_row(row)
+                            if packed:
+                                page_results.extend(packed)
+                                continue
                             parsed = self._parse_table_row(row)
                             if parsed:
                                 page_results.append(parsed)
@@ -138,10 +142,79 @@ class HDFCParser(BaseParser):
                     # Text fallback scoped to this page
                     if not page_results:
                         text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
-                        page_results.extend(parse_text_transactions(text, debit_positive=False))
+                        page_results.extend(parse_text_transactions(text, debit_positive=False, dayfirst=True))
 
                     results.extend(page_results)
 
+            return results
+        except Exception:
+            return []
+
+    def _split_narrations(self, text: str, expected_count: int) -> list[str]:
+        lines = [line.strip() for line in (text or "").splitlines() if line and line.strip()]
+        starts = (
+            "UPI-", "NEFT", "IMPS", "MMT/", "BIL/", "ACH", "POS", "ATM",
+            "NWD", "EAW", "RTGS", "CHQ", "CHEQUE", "CASH", "SALARY",
+            "INTEREST", "REVERSAL", "REFUND",
+        )
+        chunks: list[str] = []
+        current: list[str] = []
+        for line in lines:
+            normalized = line.upper()
+            is_start = normalized.startswith(starts)
+            if normalized == "R":
+                continue
+            if is_start and current:
+                chunks.append(" ".join(current))
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            chunks.append(" ".join(current))
+        if len(chunks) == expected_count:
+            return chunks
+        return [f"HDFC transaction {i + 1}" for i in range(expected_count)]
+
+    def _parse_packed_table_row(self, row: list) -> List[ParsedTransaction]:
+        """
+        Some HDFC PDFs extract as one table row where each column contains all
+        page values separated by newlines. Re-split those columns positionally
+        so we do not mistake Closing Balance values for transaction amounts.
+        """
+        try:
+            cells = [str(c or "").strip() for c in row]
+            if len(cells) < 7:
+                return []
+
+            dates = [d.strip() for d in cells[0].splitlines() if parse_date_dayfirst(d.strip())]
+            if len(dates) < 2:
+                return []
+
+            withdrawals = [parse_amount(v) for v in cells[4].splitlines() if v.strip()]
+            deposits = [parse_amount(v) for v in cells[5].splitlines() if v.strip()]
+            descriptions = self._split_narrations(cells[1], len(dates))
+            results: List[ParsedTransaction] = []
+
+            for i, date_str in enumerate(dates):
+                withdrawal = withdrawals[i] if i < len(withdrawals) else None
+                deposit = deposits[i] if i < len(deposits) else None
+                if withdrawal is not None and withdrawal > 0:
+                    amount = withdrawal
+                    direction = "debit"
+                elif deposit is not None and deposit > 0:
+                    amount = deposit
+                    direction = "credit"
+                else:
+                    continue
+                txn_date = parse_date_dayfirst(date_str)
+                if not txn_date:
+                    continue
+                results.append(ParsedTransaction(
+                    date=txn_date,
+                    description=descriptions[i] if i < len(descriptions) else f"HDFC transaction {i + 1}",
+                    amount=amount,
+                    direction=direction,
+                ))
             return results
         except Exception:
             return []
@@ -159,7 +232,7 @@ class HDFCParser(BaseParser):
             if _is_skip_row(cells):
                 return None
 
-            txn_date = parse_date(cells[0])
+            txn_date = parse_date_dayfirst(cells[0])
             if not txn_date:
                 return None
 

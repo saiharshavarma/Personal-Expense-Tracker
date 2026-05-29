@@ -4,13 +4,13 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from db.database import get_db
-from db.models import Transaction
+from db.models import Account, Transaction
 
 router = APIRouter(tags=["transactions"])
 
@@ -70,7 +70,52 @@ class TransactionUpdate(BaseModel):
 class BulkActionRequest(BaseModel):
     transaction_ids: List[uuid.UUID]
     action: str  # "categorize", "mark_reimbursable", "delete", "tag"
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
+
+
+_VALID_DIRECTIONS = {"debit", "credit"}
+_REIMBURSABLE_STATUSES = {"to_submit", "submitted", "approved", "paid", "partial", "rejected"}
+
+
+def _normalize_transaction_payload(data: dict) -> dict:
+    if "amount" in data and data["amount"] is not None and data["amount"] <= 0:
+        raise HTTPException(status_code=400, detail="Transaction amount must be positive")
+    if "direction" in data and data["direction"] is not None and data["direction"] not in _VALID_DIRECTIONS:
+        raise HTTPException(status_code=400, detail="Direction must be 'debit' or 'credit'")
+    if (
+        "received_reimbursement" in data
+        and data["received_reimbursement"] is not None
+        and data["received_reimbursement"] < 0
+    ):
+        raise HTTPException(status_code=400, detail="Received reimbursement cannot be negative")
+    if (
+        "expected_reimbursement" in data
+        and data["expected_reimbursement"] is not None
+        and data["expected_reimbursement"] < 0
+    ):
+        raise HTTPException(status_code=400, detail="Expected reimbursement cannot be negative")
+    if (
+        "reimbursement_status" in data
+        and data["reimbursement_status"] is not None
+        and data["reimbursement_status"] not in (_REIMBURSABLE_STATUSES | {"not_reimbursable"})
+    ):
+        raise HTTPException(status_code=400, detail="Invalid reimbursement status")
+
+    if data.get("is_reimbursable") is True:
+        if not data.get("reimbursement_status") or data.get("reimbursement_status") == "not_reimbursable":
+            data["reimbursement_status"] = "to_submit"
+        elif data["reimbursement_status"] not in _REIMBURSABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Invalid reimbursement status for a reimbursable transaction")
+    elif data.get("is_reimbursable") is False:
+        data["reimbursement_status"] = "not_reimbursable"
+        data["reimbursement_source"] = None
+
+    return data
+
+
+async def _ensure_account_exists(account_id: Optional[uuid.UUID], db: AsyncSession) -> None:
+    if account_id and await db.get(Account, account_id) is None:
+        raise HTTPException(status_code=404, detail="Account not found")
 
 
 def _serialize(t: Transaction) -> dict:
@@ -281,7 +326,8 @@ async def create_transaction(
     db: AsyncSession = Depends(get_db),
 ):
     from services.dedup import compute_duplicate_hash
-    data = body.model_dump()
+    data = _normalize_transaction_payload(body.model_dump())
+    await _ensure_account_exists(data.get("account_id"), db)
     if data.get("description"):
         data["duplicate_hash"] = compute_duplicate_hash(
             data["date"], data["amount"], data["description"], data.get("direction", "")
@@ -323,13 +369,29 @@ async def update_transaction(
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    updates = body.model_dump(exclude_none=True)
+    from services.dedup import compute_duplicate_hash
+    updates = _normalize_transaction_payload(body.model_dump(exclude_none=True))
+    await _ensure_account_exists(updates.get("account_id"), db)
     for k, v in updates.items():
         if hasattr(t, k):
             setattr(t, k, v)
+    if "reimbursement_status" in updates and "is_reimbursable" not in updates:
+        if t.reimbursement_status == "not_reimbursable":
+            t.is_reimbursable = False
+            t.reimbursement_source = None
+        elif t.reimbursement_status in _REIMBURSABLE_STATUSES:
+            t.is_reimbursable = True
+    if {"date", "amount", "description", "direction"}.intersection(updates) and t.description:
+        t.duplicate_hash = compute_duplicate_hash(t.date, t.amount, t.description, t.direction or "")
     t.updated_at = datetime.utcnow()
-    await db.commit()
-    await db.refresh(t)
+    try:
+        await db.commit()
+        await db.refresh(t)
+    except Exception as e:
+        await db.rollback()
+        if "duplicate_hash" in str(e):
+            raise HTTPException(status_code=409, detail="Duplicate transaction")
+        raise
 
     # If any categorization field was explicitly edited, teach the rules engine
     _LEARNING_FIELDS = {
@@ -406,10 +468,21 @@ async def bulk_action(
             t.updated_at = datetime.utcnow()
         elif body.action == "mark_reimbursable":
             t.is_reimbursable = body.payload.get("is_reimbursable", True)
+            if t.is_reimbursable:
+                t.reimbursement_status = "to_submit"
+            else:
+                t.reimbursement_status = "not_reimbursable"
+                t.reimbursement_source = None
             if "reimbursement_source" in body.payload:
                 t.reimbursement_source = body.payload["reimbursement_source"]
             if "reimbursement_status" in body.payload:
-                t.reimbursement_status = body.payload["reimbursement_status"]
+                status = body.payload["reimbursement_status"]
+                if t.is_reimbursable and status in _REIMBURSABLE_STATUSES:
+                    t.reimbursement_status = status
+                elif not t.is_reimbursable and status == "not_reimbursable":
+                    t.reimbursement_status = status
+                else:
+                    raise HTTPException(status_code=400, detail="Invalid reimbursement status for transaction state")
             t.updated_at = datetime.utcnow()
         elif body.action == "tag":
             existing = set(t.tags or [])
@@ -427,6 +500,20 @@ async def bulk_action(
             for field, value in body.payload.items():
                 if field in allowed and hasattr(t, field):
                     setattr(t, field, value)
+            if "is_reimbursable" in body.payload:
+                if t.is_reimbursable and t.reimbursement_status == "not_reimbursable":
+                    t.reimbursement_status = "to_submit"
+                elif not t.is_reimbursable:
+                    t.reimbursement_status = "not_reimbursable"
+                    t.reimbursement_source = None
+            if "reimbursement_status" in body.payload:
+                if t.reimbursement_status == "not_reimbursable":
+                    t.is_reimbursable = False
+                    t.reimbursement_source = None
+                elif t.reimbursement_status in _REIMBURSABLE_STATUSES:
+                    t.is_reimbursable = True
+                else:
+                    raise HTTPException(status_code=400, detail="Invalid reimbursement status")
             t.updated_at = datetime.utcnow()
         updated += 1
 

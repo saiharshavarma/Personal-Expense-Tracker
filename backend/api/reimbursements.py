@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +21,7 @@ class BatchCreate(BaseModel):
     expense_tool: Optional[str] = None
     submission_method: Optional[str] = None
     notes: Optional[str] = None
-    transaction_ids: List[uuid.UUID] = []
+    transaction_ids: List[uuid.UUID] = Field(default_factory=list)
 
 
 class BatchUpdate(BaseModel):
@@ -171,6 +171,12 @@ async def update_reimbursement_status(
     if status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid}")
     t.reimbursement_status = status
+    if status == "not_reimbursable":
+        t.is_reimbursable = False
+        t.reimbursement_source = None
+        t.reimbursement_batch_id = None
+    else:
+        t.is_reimbursable = True
     # H-9: Only set received_reimbursement if it hasn't been recorded yet.
     # If the user already captured a partial or full received amount, preserve it —
     # they may have entered the real received value rather than the expected amount.

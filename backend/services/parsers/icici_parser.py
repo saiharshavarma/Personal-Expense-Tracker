@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from services.parsers.base_parser import (
     BaseParser, ParsedTransaction,
-    parse_date, parse_amount,
+    parse_date_dayfirst, parse_amount,
     extract_tables_best_effort, parse_text_transactions,
 )
 
@@ -64,7 +64,7 @@ class ICICIParser(BaseParser):
                 if "transaction date" in date_str.lower():
                     continue
 
-                txn_date = parse_date(date_str)
+                txn_date = parse_date_dayfirst(date_str)
                 if not txn_date:
                     continue
 
@@ -115,7 +115,7 @@ class ICICIParser(BaseParser):
                     if not page_results:
                         text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
                         # ICICI uses positive debit = expense (same as BofA sign convention)
-                        page_results.extend(parse_text_transactions(text, debit_positive=False))
+                        page_results.extend(parse_text_transactions(text, debit_positive=False, dayfirst=True))
 
                     results.extend(page_results)
 
@@ -138,13 +138,13 @@ class ICICIParser(BaseParser):
                 return None
 
             # Detect whether S.No. column is present
-            txn_date = parse_date(cells[0])
+            txn_date = parse_date_dayfirst(cells[0])
             if txn_date:
                 # Format A — Date in cells[0]
                 desc_idx, ref_idx, wd_idx, dep_idx = 1, 2, 3, 4
             elif len(cells) >= 5:
                 # Format B — try Date in cells[1]
-                txn_date = parse_date(cells[1])
+                txn_date = parse_date_dayfirst(cells[1])
                 if not txn_date:
                     return None
                 desc_idx, ref_idx, wd_idx, dep_idx = 2, 3, 4, 5

@@ -19,7 +19,7 @@ class AmexParser(BaseParser):
     def parse(self, file_bytes: bytes, filename: str) -> List[ParsedTransaction]:
         if filename.lower().endswith(".csv"):
             return self._parse_csv(file_bytes)
-        return self._parse_pdf(file_bytes)
+        return self._parse_pdf(file_bytes, filename)
 
     # ── CSV ──────────────────────────────────────────────────────────────────
 
@@ -54,11 +54,13 @@ class AmexParser(BaseParser):
 
     # ── PDF ──────────────────────────────────────────────────────────────────
 
-    def _parse_pdf(self, file_bytes: bytes) -> List[ParsedTransaction]:
+    def _parse_pdf(self, file_bytes: bytes, filename: str) -> List[ParsedTransaction]:
         import pdfplumber
         results: List[ParsedTransaction] = []
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            text_parts = []
             for page in pdf.pages:
+                text_parts.append(page.extract_text(x_tolerance=3, y_tolerance=3) or "")
                 page_results: List[ParsedTransaction] = []
 
                 tables = extract_tables_best_effort(page)
@@ -77,7 +79,89 @@ class AmexParser(BaseParser):
                     )
 
                 results.extend(page_results)
+            text_results = self._parse_amex_text("\n".join(text_parts), filename)
+            if len(text_results) > len(results):
+                return text_results
         return results
+
+    def _statement_year(self, text: str, filename: str) -> str:
+        for pattern in (
+            r"(\d{2})[./](\d{2})[./](\d{4})",
+            r"\b(?:20|19)\d{2}\b",
+        ):
+            m = re.search(pattern, text)
+            if m:
+                return m.group(3) if len(m.groups()) >= 3 else m.group(0)
+        file_match = re.search(r"'(\d{2})", filename)
+        if file_match:
+            return f"20{file_match.group(1)}"
+        return str(__import__("datetime").datetime.today().year)
+
+    def _parse_amex_text(self, text: str, filename: str) -> List[ParsedTransaction]:
+        """Parse Amex text rows when pdfplumber does not expose clean tables."""
+        year = self._statement_year(text, filename)
+        dot_row_pat = re.compile(
+            r"^(\d{1,2})[./](\d{1,2})[./]\d{1,4}\s+(.+?)\s+((?:[$€£¥₹]?\(?[\d,]+(?:\.\d{2})?\)?\s*)+)$"
+        )
+        month_row_pat = re.compile(
+            r"^([A-Z][a-z]{2,8}\.?\s+\d{1,2})(?:,\s*(\d{4}))?\s+(.+?)\s+(-?\(?[$€£¥₹]?[\d,]+\.\d{2}\)?)$"
+        )
+        amount_pat = re.compile(r"[\d,]+(?:\.\d{2})?")
+        results: List[ParsedTransaction] = []
+        seen: set[tuple] = set()
+        for raw_line in text.splitlines():
+            line = " ".join(raw_line.split())
+            if self._skip_text_row(line):
+                continue
+
+            match = dot_row_pat.match(line)
+            if match:
+                day, month, desc, amounts_text = match.groups()
+                amounts = amount_pat.findall(amounts_text)
+                if not amounts:
+                    continue
+                amount = parse_amount(amounts[-1])
+                txn_date = parse_date(f"{month}/{day}/{year}")
+            else:
+                match = month_row_pat.match(line)
+                if not match:
+                    continue
+                date_text, explicit_year, desc, amount_text = match.groups()
+                amount = parse_amount(amount_text)
+                txn_date = parse_date(f"{date_text} {explicit_year or year}")
+
+            if not txn_date or amount is None or amount == 0:
+                continue
+            direction = self._direction_for_description(desc, amount)
+            key = (txn_date, desc.strip(), abs(amount), direction)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(ParsedTransaction(
+                date=txn_date,
+                description=desc.strip(),
+                amount=abs(amount),
+                direction=direction,
+            ))
+        return results
+
+    def _skip_text_row(self, line: str) -> bool:
+        upper = line.upper()
+        return (
+            not line
+            or "TOTAL OF NEW TRANSACTIONS" in upper
+            or upper.startswith("STATEMENT ")
+            or upper.startswith("PAYMENT DUE")
+            or upper.startswith("MINIMUM PAYMENT")
+            or upper.startswith("OPENING BALANCE")
+            or upper.startswith("CLOSING BALANCE")
+        )
+
+    def _direction_for_description(self, description: str, amount: Decimal) -> str:
+        upper = description.upper()
+        if amount < 0 or upper.startswith(("REFUND", "REVERSAL", "PAYMENT RECEIVED", "THANK YOU")):
+            return "credit"
+        return "debit"
 
     def _parse_table_row(self, row: list) -> Optional[ParsedTransaction]:
         try:

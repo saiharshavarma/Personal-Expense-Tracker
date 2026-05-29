@@ -59,7 +59,9 @@ class ChaseParser(BaseParser):
         import pdfplumber
         results: List[ParsedTransaction] = []
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            full_text_parts = []
             for page in pdf.pages:
+                full_text_parts.append(page.extract_text(x_tolerance=3, y_tolerance=3) or "")
                 page_results: List[ParsedTransaction] = []
 
                 # Try table extraction with multiple strategies
@@ -76,6 +78,68 @@ class ChaseParser(BaseParser):
                     page_results.extend(parse_text_transactions(text, debit_positive=False))
 
                 results.extend(page_results)
+
+        text_results = self._parse_statement_text("\n".join(full_text_parts))
+        if len(text_results) > len(results):
+            return text_results
+        return results
+
+    def _statement_year(self, text: str) -> int:
+        m = re.search(r"\bthrough\s+[A-Za-z]+\s+\d{1,2},\s+(\d{4})", text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"\b(\d{4})\b", text)
+        if m:
+            return int(m.group(1))
+        from datetime import datetime
+        return datetime.today().year
+
+    def _parse_short_date(self, mmdd: str, year: int):
+        return parse_date(f"{mmdd}/{year}")
+
+    def _parse_statement_text(self, text: str) -> List[ParsedTransaction]:
+        year = self._statement_year(text)
+        results: List[ParsedTransaction] = []
+        section = None
+        row_pat = re.compile(r"^(\d{2}/\d{2})\s+(.+?)\s+\$?([\d,]+\.\d{2})$")
+        check_pat = re.compile(r"^(.+?)\s+(\d{2}/\d{2})\s+\$?([\d,]+\.\d{2})$")
+
+        for raw_line in text.splitlines():
+            line = " ".join(raw_line.split())
+            upper = line.upper()
+            if upper.startswith("DEPOSITS AND ADDITIONS"):
+                section = "credit"
+                continue
+            if upper.startswith("OTHER WITHDRAWALS") or upper.startswith("CHECKS PAID"):
+                section = "debit"
+                continue
+            if upper.startswith("DAILY ENDING BALANCE") or upper.startswith("SERVICE CHARGE"):
+                section = None
+                continue
+            if not section or upper.startswith("DATE ") or upper.startswith("TOTAL "):
+                continue
+
+            match = row_pat.match(line)
+            if match:
+                date_str, desc, amount_str = match.groups()
+            elif section == "debit":
+                match = check_pat.match(line)
+                if not match:
+                    continue
+                desc, date_str, amount_str = match.groups()
+            else:
+                continue
+
+            txn_date = self._parse_short_date(date_str, year)
+            amount = parse_amount(amount_str)
+            if not txn_date or amount is None or amount == 0:
+                continue
+            results.append(ParsedTransaction(
+                date=txn_date,
+                description=desc.strip(),
+                amount=abs(amount),
+                direction=section,
+            ))
         return results
 
     def _parse_table_row(self, row: list) -> Optional[ParsedTransaction]:

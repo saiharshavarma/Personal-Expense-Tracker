@@ -11,7 +11,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -126,7 +126,7 @@ class WebAuthnFinishRequest(BaseModel):
     rawId: str
     response: dict
     type: str
-    clientExtensionResults: dict = {}
+    clientExtensionResults: dict = Field(default_factory=dict)
 
 
 # ── routes ─────────────────────────────────────────────────────────────────────

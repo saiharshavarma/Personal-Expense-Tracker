@@ -5,13 +5,13 @@ from decimal import Decimal
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user
 from db.database import get_db
-from db.models import ImportBatch, Transaction, UserPreferences
+from db.models import Account, ImportBatch, Transaction, UserPreferences
 from services.dedup import compute_duplicate_hash
 from services.ai.categorizer import categorize_transactions, confidence_to_color, YELLOW_THRESHOLD
 from services.parsers.chase_parser import ChaseParser
@@ -49,6 +49,22 @@ def _detect_parser(file_bytes: bytes, filename: str):
             best_score = score
             best_parser = p
     return best_parser, best_score
+
+
+def _parse_optional_uuid(value: Optional[str], field_name: str):
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+
+async def _resolve_account_uuid(value: Optional[str], db: AsyncSession):
+    account_uuid = _parse_optional_uuid(value, "account_id")
+    if account_uuid and await db.get(Account, account_uuid) is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account_uuid
 
 
 async def _get_ai_provider(db: AsyncSession):
@@ -105,7 +121,7 @@ async def _ingest_file(
     if not parsed_txns:
         raise HTTPException(status_code=422, detail="No transactions found in file.")
 
-    account_uuid = uuid.UUID(account_id) if account_id else None
+    account_uuid = await _resolve_account_uuid(account_id, db)
 
     # Dedup pass — single DB round-trip for the whole file
     new_txns = []
@@ -287,18 +303,19 @@ class StagedTransaction(BaseModel):
     skip: bool = False
     # User-selected category (overrides AI suggestion when set)
     category: Optional[str] = None
+    subcategory: Optional[str] = None
     # AI fields passed through unchanged
     ai_category: Optional[str] = None
     ai_subcategory: Optional[str] = None
     ai_confidence: Optional[float] = None
-    ai_flags: List[str] = []
+    ai_flags: List[str] = Field(default_factory=list)
     merchant: Optional[str] = None
     need_want_savings: Optional[str] = None
     fixed_variable: Optional[str] = None
     personal_work_shared: Optional[str] = None
     is_reimbursable: bool = False
     is_recurring: bool = False
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list)
 
 
 class CommitImportBody(BaseModel):
@@ -325,8 +342,9 @@ async def parse_preview(
     file_bytes = await file.read()
     if len(file_bytes) > 50_000_000:
         raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
+    await _resolve_account_uuid(account_id, db)
 
-    filename = file.filename
+    filename = file.filename or "upload"
     if filename.lower().endswith(".pdf") and not file_bytes.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
 
@@ -359,10 +377,10 @@ async def parse_preview(
         import asyncio as _asyncio
         cat_results = await _asyncio.wait_for(
             categorize_transactions(txn_dicts, db, ai_provider),
-            timeout=90.0,
+            timeout=20.0,
         )
     except _asyncio.TimeoutError:
-        logger.warning("AI categorisation timed out during parse-preview")
+        logger.warning("AI categorisation timed out during parse-preview; returning uncategorised preview")
     except Exception as e:
         logger.warning("AI categorisation failed during parse-preview: %s", e)
 
@@ -390,6 +408,7 @@ async def parse_preview(
             "tags": ai.suggested_tags if ai else [],
             # Editable fields start equal to AI suggestion
             "category": ai.category if ai else None,
+            "subcategory": ai.subcategory if ai else None,
             "skip": False,
         })
 
@@ -420,7 +439,7 @@ async def commit_import(
             detail="No transactions to import — all were marked as skip.",
         )
 
-    account_uuid = uuid.UUID(body.account_id) if body.account_id else None
+    account_uuid = await _resolve_account_uuid(body.account_id, db)
 
     # Dedup pass — same logic as _ingest_file
     seen_hashes: set = set()
@@ -430,11 +449,18 @@ async def commit_import(
             txn_date = date_type.fromisoformat(txn.date)
             amount = Decimal(str(txn.amount))
         except Exception:
-            continue
+            raise HTTPException(status_code=400, detail=f"Invalid transaction date or amount: {txn.description}")
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail=f"Transaction amount must be positive: {txn.description}")
+        if txn.direction not in {"debit", "credit"}:
+            raise HTTPException(status_code=400, detail=f"Invalid transaction direction: {txn.direction}")
         h = compute_duplicate_hash(txn_date, amount, txn.description, txn.direction)
         if h not in seen_hashes:
             seen_hashes.add(h)
             candidate_hashes[h] = txn
+
+    if not candidate_hashes:
+        raise HTTPException(status_code=400, detail="No valid transactions to import.")
 
     existing_result = await db.execute(
         select(Transaction.duplicate_hash).where(
@@ -474,6 +500,9 @@ async def commit_import(
 
         # User-chosen category wins; fall back to AI suggestion
         final_category = txn.category or txn.ai_category or None
+        final_subcategory = txn.subcategory or (
+            txn.ai_subcategory if final_category and final_category == txn.ai_category else None
+        )
         ai_conf = (
             Decimal(str(round(txn.ai_confidence, 3)))
             if txn.ai_confidence is not None
@@ -490,7 +519,7 @@ async def commit_import(
             import_batch_id=batch.id,
             duplicate_hash=h,
             category=final_category,
-            subcategory=txn.ai_subcategory or None,
+            subcategory=final_subcategory,
             ai_category=txn.ai_category,
             ai_subcategory=txn.ai_subcategory,
             ai_confidence=ai_conf,
@@ -502,7 +531,7 @@ async def commit_import(
             is_reimbursable=txn.is_reimbursable,
             is_recurring=txn.is_recurring,
             tags=txn.tags or [],
-            reimbursement_status="to_submit" if txn.is_reimbursable else None,
+            reimbursement_status="to_submit" if txn.is_reimbursable else "not_reimbursable",
             needs_review=False,
             ai_reviewed=True,
         )
@@ -528,14 +557,15 @@ async def upload_pdf(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not file.filename.lower().endswith(".pdf"):
+    filename = file.filename or ""
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files accepted on this endpoint.")
     file_bytes = await file.read()
     if len(file_bytes) > 50_000_000:
         raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
     if not file_bytes.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
-    return await _ingest_file(file_bytes, file.filename, account_id, db)
+    return await _ingest_file(file_bytes, filename, account_id, db)
 
 
 @router.post("/upload-csv")
@@ -545,7 +575,8 @@ async def upload_csv(
     _user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not file.filename.lower().endswith(".csv"):
+    filename = file.filename or ""
+    if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files accepted on this endpoint.")
     file_bytes = await file.read()
     if len(file_bytes) > 50_000_000:
@@ -558,7 +589,7 @@ async def upload_csv(
             file_bytes.decode("latin-1")
         except UnicodeDecodeError:
             raise HTTPException(status_code=400, detail="File does not appear to be a valid CSV (encoding error).")
-    return await _ingest_file(file_bytes, file.filename, account_id, db)
+    return await _ingest_file(file_bytes, filename, account_id, db)
 
 
 class ConfirmImportBody(BaseModel):
@@ -691,6 +722,10 @@ async def review_queue_action(
     category = body.get("category")
 
     if action == "reject":
+        if t.import_batch_id:
+            batch_obj = await db.get(ImportBatch, t.import_batch_id)
+            if batch_obj and batch_obj.needs_review_count > 0:
+                batch_obj.needs_review_count = max(0, batch_obj.needs_review_count - 1)
         await db.delete(t)
         await db.commit()
         return {"status": "deleted", "id": transaction_id}
@@ -712,15 +747,15 @@ async def review_queue_action(
                     # Category unchanged and no subcategory in payload — keep existing
                     # value, or fall back to the AI suggestion if still blank
                     t.subcategory = t.subcategory or t.ai_subcategory or None
-            if body.get("merchant_clean"):
-                t.merchant = body["merchant_clean"]
+            if "merchant_clean" in body:
+                t.merchant = body["merchant_clean"] or None
             # H-14: Check key presence (not truthiness) so that an explicit empty string
             # or None value can be used to clear the field.
             if "need_want_savings" in body:
                 t.need_want_savings = body["need_want_savings"] or None
-            if body.get("fixed_variable") is not None:
+            if "fixed_variable" in body:
                 t.fixed_variable = body["fixed_variable"] or None
-            if body.get("personal_work_shared") is not None:
+            if "personal_work_shared" in body:
                 t.personal_work_shared = body["personal_work_shared"] or None
             if "is_reimbursable" in body:
                 t.is_reimbursable = bool(body["is_reimbursable"])
