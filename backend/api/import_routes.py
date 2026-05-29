@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, date as date_type
 from decimal import Decimal
 from typing import Optional, List
 
@@ -18,13 +18,23 @@ from services.parsers.chase_parser import ChaseParser
 from services.parsers.boa_parser import BankOfAmericaParser
 from services.parsers.amex_parser import AmexParser
 from services.parsers.apple_pay_parser import ApplePayParser
+from services.parsers.icici_parser import ICICIParser
+from services.parsers.hdfc_parser import HDFCParser
 from services.parsers.generic_parser import GenericParser
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["import"])
 
-ALL_PARSERS = [ChaseParser(), BankOfAmericaParser(), AmexParser(), ApplePayParser(), GenericParser()]
+ALL_PARSERS = [
+    ChaseParser(),
+    BankOfAmericaParser(),
+    AmexParser(),
+    ApplePayParser(),
+    ICICIParser(),
+    HDFCParser(),
+    GenericParser(),  # always last — lowest confidence fallback
+]
 
 # Confidence thresholds (stored as 0-1, returned as 0-100)
 AUTO_THRESHOLD = 0.90
@@ -264,6 +274,250 @@ async def _ingest_file(
         "new_count": len(txn_objects),
         "duplicate_count": skipped,
         "needs_review_count": needs_review_count,
+    }
+
+
+# ── Two-phase import (parse-preview → commit) ─────────────────────────────────
+
+class StagedTransaction(BaseModel):
+    date: str
+    description: str
+    amount: float
+    direction: str
+    skip: bool = False
+    # User-selected category (overrides AI suggestion when set)
+    category: Optional[str] = None
+    # AI fields passed through unchanged
+    ai_category: Optional[str] = None
+    ai_subcategory: Optional[str] = None
+    ai_confidence: Optional[float] = None
+    ai_flags: List[str] = []
+    merchant: Optional[str] = None
+    need_want_savings: Optional[str] = None
+    fixed_variable: Optional[str] = None
+    personal_work_shared: Optional[str] = None
+    is_reimbursable: bool = False
+    is_recurring: bool = False
+    tags: List[str] = []
+
+
+class CommitImportBody(BaseModel):
+    filename: str
+    institution: str
+    account_id: Optional[str] = None
+    transactions: List[StagedTransaction]
+
+
+@router.post("/parse-preview")
+async def parse_preview(
+    file: UploadFile = File(...),
+    account_id: Optional[str] = Form(None),
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 1 of the two-phase import workflow.
+    Parses the uploaded file and runs AI categorisation but does NOT write
+    anything to the database.  Returns all parsed transactions with AI
+    suggestions so the client can let the user review/edit them before
+    committing via POST /import/commit.
+    """
+    file_bytes = await file.read()
+    if len(file_bytes) > 50_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 50 MB).")
+
+    filename = file.filename
+    if filename.lower().endswith(".pdf") and not file_bytes.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="File does not appear to be a valid PDF.")
+
+    parser, _confidence = _detect_parser(file_bytes, filename)
+
+    try:
+        parsed_txns = parser.parse(file_bytes, filename)
+    except Exception as e:
+        logger.error("Parser error for %s: %s", filename, e)
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {e}")
+
+    if not parsed_txns:
+        raise HTTPException(status_code=422, detail="No transactions found in file.")
+
+    # Assign temporary in-memory IDs so the AI categoriser can correlate results
+    txn_dicts = [
+        {
+            "id": str(i),
+            "date": t.date.isoformat(),
+            "description": t.description,
+            "amount": float(t.amount),
+            "direction": t.direction,
+        }
+        for i, t in enumerate(parsed_txns)
+    ]
+
+    ai_provider = await _get_ai_provider(db)
+    cat_results = []
+    try:
+        import asyncio as _asyncio
+        cat_results = await _asyncio.wait_for(
+            categorize_transactions(txn_dicts, db, ai_provider),
+            timeout=90.0,
+        )
+    except _asyncio.TimeoutError:
+        logger.warning("AI categorisation timed out during parse-preview")
+    except Exception as e:
+        logger.warning("AI categorisation failed during parse-preview: %s", e)
+
+    cat_map = {r.transaction_id: r for r in cat_results}
+
+    transactions = []
+    for i, t in enumerate(parsed_txns):
+        ai = cat_map.get(str(i))
+        transactions.append({
+            "temp_id": str(i),
+            "date": t.date.isoformat(),
+            "description": t.description,
+            "amount": float(t.amount),
+            "direction": t.direction,
+            "ai_category": ai.category if ai else None,
+            "ai_subcategory": ai.subcategory if ai else None,
+            "ai_confidence": round(ai.confidence, 3) if ai else None,
+            "ai_flags": ai.flags if ai else [],
+            "merchant": ai.merchant_clean if ai else None,
+            "need_want_savings": ai.need_want_savings if ai else None,
+            "fixed_variable": ai.fixed_variable if ai else None,
+            "personal_work_shared": ai.personal_work_shared if ai else None,
+            "is_reimbursable": bool(ai.is_reimbursable) if ai else False,
+            "is_recurring": bool(ai.is_recurring) if ai else False,
+            "tags": ai.suggested_tags if ai else [],
+            # Editable fields start equal to AI suggestion
+            "category": ai.category if ai else None,
+            "skip": False,
+        })
+
+    return {
+        "institution": parser.institution_name,
+        "filename": filename,
+        "total": len(transactions),
+        "transactions": transactions,
+    }
+
+
+@router.post("/commit")
+async def commit_import(
+    body: CommitImportBody,
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Phase 2 of the two-phase import workflow.
+    Saves the user-reviewed transactions to the database.
+    Transactions with skip=True are silently excluded.
+    All saved transactions are marked needs_review=False (user already reviewed).
+    """
+    include_txns = [t for t in body.transactions if not t.skip]
+    if not include_txns:
+        raise HTTPException(
+            status_code=400,
+            detail="No transactions to import — all were marked as skip.",
+        )
+
+    account_uuid = uuid.UUID(body.account_id) if body.account_id else None
+
+    # Dedup pass — same logic as _ingest_file
+    seen_hashes: set = set()
+    candidate_hashes: dict = {}
+    for txn in include_txns:
+        try:
+            txn_date = date_type.fromisoformat(txn.date)
+            amount = Decimal(str(txn.amount))
+        except Exception:
+            continue
+        h = compute_duplicate_hash(txn_date, amount, txn.description, txn.direction)
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            candidate_hashes[h] = txn
+
+    existing_result = await db.execute(
+        select(Transaction.duplicate_hash).where(
+            Transaction.duplicate_hash.in_(list(candidate_hashes.keys()))
+        )
+    )
+    existing_hashes = {row[0] for row in existing_result.all()}
+
+    within_file_dupes = len(include_txns) - len(candidate_hashes)
+    db_dupes = sum(1 for h in candidate_hashes if h in existing_hashes)
+    skipped = within_file_dupes + db_dupes
+    new_txns = [(t, h) for h, t in candidate_hashes.items() if h not in existing_hashes]
+
+    # Create ImportBatch with status="complete" — user already did the review
+    source_type = "pdf" if body.filename.lower().endswith(".pdf") else "csv"
+    batch = ImportBatch(
+        filename=body.filename,
+        source_type=source_type,
+        institution=body.institution,
+        account_id=account_uuid,
+        total_transactions=len(include_txns),
+        imported_transactions=0,
+        skipped_duplicates=skipped,
+        needs_review_count=0,
+        status="complete",
+        imported_at=datetime.utcnow(),
+    )
+    db.add(batch)
+    await db.flush()
+
+    for (txn, h) in new_txns:
+        try:
+            txn_date = date_type.fromisoformat(txn.date)
+            amount = Decimal(str(txn.amount))
+        except Exception:
+            continue
+
+        # User-chosen category wins; fall back to AI suggestion
+        final_category = txn.category or txn.ai_category or None
+        ai_conf = (
+            Decimal(str(round(txn.ai_confidence, 3)))
+            if txn.ai_confidence is not None
+            else None
+        )
+
+        t = Transaction(
+            date=txn_date,
+            amount=amount,
+            direction=txn.direction,
+            description=txn.description,
+            account_id=account_uuid,
+            source="import",
+            import_batch_id=batch.id,
+            duplicate_hash=h,
+            category=final_category,
+            subcategory=txn.ai_subcategory or None,
+            ai_category=txn.ai_category,
+            ai_subcategory=txn.ai_subcategory,
+            ai_confidence=ai_conf,
+            ai_flags=txn.ai_flags or [],
+            merchant=txn.merchant or None,
+            need_want_savings=txn.need_want_savings or None,
+            fixed_variable=txn.fixed_variable or None,
+            personal_work_shared=txn.personal_work_shared or None,
+            is_reimbursable=txn.is_reimbursable,
+            is_recurring=txn.is_recurring,
+            tags=txn.tags or [],
+            reimbursement_status="to_submit" if txn.is_reimbursable else None,
+            needs_review=False,
+            ai_reviewed=True,
+        )
+        db.add(t)
+
+    await db.flush()
+    batch.imported_transactions = len(new_txns)
+    await db.commit()
+    await db.refresh(batch)
+
+    return {
+        "batch_id": str(batch.id),
+        "institution": body.institution,
+        "imported": batch.imported_transactions,
+        "duplicates": skipped,
     }
 
 

@@ -341,7 +341,7 @@ export function AskAI() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isTyping, setIsTyping] = useState(false)
   const [range, setRange] = useState<DateRange>(defaultRange)
-  const [excludeReimbursable, setExcludeReimbursable] = useState(true)
+  const [excludeReimbursable, setExcludeReimbursable] = useState(false)
   const chatBottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 

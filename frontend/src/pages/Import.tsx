@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Upload, FileText, Table2, Building2, CheckCircle2, Clock,
-  AlertCircle, Loader2, X, ChevronDown, Check, Eye,
+  AlertCircle, Loader2, X, ChevronDown, Check, ArrowLeftRight,
+  SkipForward, DollarSign, RefreshCw, Tag,
 } from 'lucide-react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { TopBar } from '@/components/layout/TopBar'
@@ -15,73 +16,54 @@ import { ALL_CATEGORIES } from '@/lib/categories'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface QueueTransaction {
-  id: string
+interface StagingTransaction {
+  temp_id: string
+  date: string
   description: string
   amount: number
-  date: string
   direction: 'debit' | 'credit'
-  // AI fields
+  // AI suggestions
   ai_category: string | null
-  ai_subcategory: string | null
-  ai_confidence: number | null  // 0–1 scale (e.g. 0.85 = 85%)
+  ai_confidence: number | null
   ai_flags: string[]
-  // User-editable classification fields (pre-filled by AI)
-  category: string | null
-  subcategory: string | null
   merchant: string | null
   need_want_savings: string | null
   fixed_variable: string | null
-  personal_work_shared: string | null
   is_reimbursable: boolean
   is_recurring: boolean
   tags: string[]
-  batch_id: string | null
+  // User-editable fields (initialised from AI suggestions)
+  category: string | null
+  skip: boolean
 }
 
-interface PreviewTransaction {
-  date: string
-  description: string
-  amount: number
-  direction: string
-}
-
-interface UploadResult {
-  batch_id: string
-  preview: PreviewTransaction[]
+interface StagingResult {
+  institution: string
+  filename: string
   total: number
-  institution?: string
+  transactions: StagingTransaction[]
 }
 
-interface ConfirmResult {
+interface CommitResult {
+  batch_id: string
+  institution: string
   imported: number
   duplicates: number
-  batch_id: string
 }
 
 interface FileEntry {
   file: File
   id: string
   account_id: string
-  status: 'pending' | 'uploading' | 'preview' | 'confirming' | 'done' | 'error'
+  status: 'pending' | 'uploading' | 'staging' | 'committing' | 'done' | 'error'
   error?: string
-  uploadResult?: UploadResult
-  confirmResult?: ConfirmResult
+  stagingResult?: StagingResult
+  /** Mutable working copy of transactions — user edits applied here */
+  stagedTxns?: StagingTransaction[]
+  commitResult?: CommitResult
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function detectInstitution(filename: string): string {
-  const lower = filename.toLowerCase()
-  if (lower.includes('chase')) return 'Chase'
-  if (lower.includes('boa') || lower.includes('bankofamerica') || lower.includes('bank_of_america')) return 'Bank of America'
-  if (lower.includes('amex') || lower.includes('american_express') || lower.includes('americanexpress')) return 'American Express'
-  if (lower.includes('apple') || lower.includes('applepay')) return 'Apple Pay'
-  if (lower.includes('wellsfargo') || lower.includes('wells_fargo')) return 'Wells Fargo'
-  if (lower.includes('citi')) return 'Citibank'
-  if (lower.includes('discover')) return 'Discover'
-  return 'Unknown Institution'
-}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -89,20 +71,247 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function uid() {
-  return Math.random().toString(36).slice(2)
+function uid() { return Math.random().toString(36).slice(2) }
+
+function fmtAmount(amount: number, direction: 'debit' | 'credit') {
+  const sign = direction === 'credit' ? '+' : '−'
+  return `${sign}$${Math.abs(amount).toFixed(2)}`
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+function confColor(conf: number | null) {
+  if (conf === null) return 'text-muted-foreground'
+  if (conf >= 0.90) return 'text-green-500'
+  if (conf >= 0.75) return 'text-yellow-500'
+  return 'text-red-500'
+}
+
+// ── StatusBadge ───────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
-  // Keyed on actual backend batch statuses: "staged" (pending review) and "complete".
   const map: Record<string, { label: string; variant: 'success' | 'warning' | 'destructive' | 'secondary' | 'outline' | 'default' }> = {
-    staged:   { label: 'Staged',     variant: 'secondary' },
-    complete: { label: 'Complete',   variant: 'success'   },
+    staged:   { label: 'Staged',   variant: 'secondary' },
+    complete: { label: 'Complete', variant: 'success'   },
   }
   const cfg = map[status] ?? { label: status, variant: 'outline' as const }
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>
+}
+
+// ── Staging Review ────────────────────────────────────────────────────────────
+
+interface StagingReviewProps {
+  result: StagingResult
+  stagedTxns: StagingTransaction[]
+  onUpdate: (tempId: string, changes: Partial<StagingTransaction>) => void
+  onCommit: () => void
+  committing: boolean
+}
+
+function StagingReview({ result, stagedTxns, onUpdate, onCommit, committing }: StagingReviewProps) {
+  const [editingCategory, setEditingCategory] = useState<string | null>(null)
+
+  const included = stagedTxns.filter(t => !t.skip)
+  const skipped  = stagedTxns.filter(t => t.skip)
+
+  const flipAll = () => {
+    stagedTxns.forEach(t => {
+      if (!t.skip) onUpdate(t.temp_id, { direction: t.direction === 'debit' ? 'credit' : 'debit' })
+    })
+  }
+
+  const skipAll = () => stagedTxns.forEach(t => onUpdate(t.temp_id, { skip: true }))
+  const includeAll = () => stagedTxns.forEach(t => onUpdate(t.temp_id, { skip: false }))
+
+  return (
+    <div className="space-y-3">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <span className="font-medium text-muted-foreground">
+          {included.length} to import{skipped.length > 0 ? `, ${skipped.length} skipped` : ''}
+        </span>
+        <div className="flex-1" />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1.5"
+          onClick={flipAll}
+          title="Flip all debit ↔ credit (useful when the whole statement was parsed with the wrong sign)"
+        >
+          <ArrowLeftRight className="w-3 h-3" />
+          Flip All Directions
+        </Button>
+        {skipped.length > 0
+          ? <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={includeAll}>
+              <RefreshCw className="w-3 h-3" /> Include All
+            </Button>
+          : <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 text-muted-foreground" onClick={skipAll}>
+              <SkipForward className="w-3 h-3" /> Skip All
+            </Button>
+        }
+      </div>
+
+      {/* Table */}
+      <div className="rounded-md border overflow-hidden">
+        <div className="overflow-x-auto">
+          <div className="max-h-[420px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/95 backdrop-blur-sm z-10">
+                <tr className="border-b">
+                  <th className="text-left px-2 py-2 font-medium w-8"></th>
+                  <th className="text-left px-2 py-2 font-medium whitespace-nowrap">Date</th>
+                  <th className="text-left px-2 py-2 font-medium">Description</th>
+                  <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Direction</th>
+                  <th className="text-right px-2 py-2 font-medium whitespace-nowrap">Amount</th>
+                  <th className="text-left px-2 py-2 font-medium">Category</th>
+                  <th className="text-center px-2 py-2 font-medium whitespace-nowrap">Reimb.</th>
+                  <th className="text-center px-2 py-2 font-medium w-6"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {stagedTxns.map((txn) => {
+                  const dimmed = txn.skip
+                  return (
+                    <tr
+                      key={txn.temp_id}
+                      className={`border-b last:border-0 transition-colors ${
+                        dimmed ? 'opacity-35 bg-muted/20' : 'hover:bg-muted/30'
+                      }`}
+                    >
+                      {/* Row number */}
+                      <td className="px-2 py-1.5 text-muted-foreground/40 text-center tabular-nums">
+                        {parseInt(txn.temp_id) + 1}
+                      </td>
+
+                      {/* Date */}
+                      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
+                        {txn.date}
+                      </td>
+
+                      {/* Description */}
+                      <td className="px-2 py-1.5 max-w-[200px]">
+                        <span className="truncate block" title={txn.description}>
+                          {txn.description}
+                        </span>
+                        {txn.merchant && txn.merchant !== txn.description && (
+                          <span className="text-muted-foreground/60 truncate block">{txn.merchant}</span>
+                        )}
+                      </td>
+
+                      {/* Direction toggle */}
+                      <td className="px-2 py-1.5 text-center">
+                        <button
+                          disabled={dimmed}
+                          onClick={() => onUpdate(txn.temp_id, {
+                            direction: txn.direction === 'debit' ? 'credit' : 'debit'
+                          })}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                            txn.direction === 'debit'
+                              ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
+                              : 'bg-green-500/10 text-green-600 hover:bg-green-500/20'
+                          } disabled:pointer-events-none`}
+                          title="Click to flip direction"
+                        >
+                          <ArrowLeftRight className="w-2.5 h-2.5" />
+                          {txn.direction}
+                        </button>
+                      </td>
+
+                      {/* Amount */}
+                      <td className={`px-2 py-1.5 text-right tabular-nums font-medium whitespace-nowrap ${
+                        txn.direction === 'credit' ? 'text-green-500' : ''
+                      }`}>
+                        {fmtAmount(txn.amount, txn.direction)}
+                      </td>
+
+                      {/* Category */}
+                      <td className="px-2 py-1.5 min-w-[130px]">
+                        {editingCategory === txn.temp_id ? (
+                          <select
+                            autoFocus
+                            value={txn.category ?? ''}
+                            onChange={e => {
+                              onUpdate(txn.temp_id, { category: e.target.value || null })
+                              setEditingCategory(null)
+                            }}
+                            onBlur={() => setEditingCategory(null)}
+                            className="w-full h-6 rounded border border-input bg-background px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                          >
+                            <option value="">Uncategorized</option>
+                            {ALL_CATEGORIES.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button
+                            disabled={dimmed}
+                            onClick={() => setEditingCategory(txn.temp_id)}
+                            className="flex items-center gap-1 text-left group w-full disabled:pointer-events-none"
+                          >
+                            <span className={`truncate ${txn.category ? 'text-foreground' : 'text-muted-foreground/50 italic'}`}>
+                              {txn.category ?? 'Set category'}
+                            </span>
+                            {txn.ai_confidence !== null && (
+                              <span className={`flex-shrink-0 text-[10px] tabular-nums ${confColor(txn.ai_confidence)}`}>
+                                {Math.round((txn.ai_confidence) * 100)}%
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </td>
+
+                      {/* Reimbursable */}
+                      <td className="px-2 py-1.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={txn.is_reimbursable}
+                          disabled={dimmed}
+                          onChange={e => onUpdate(txn.temp_id, { is_reimbursable: e.target.checked })}
+                          className="rounded border-input accent-amber-500 disabled:pointer-events-none"
+                          title="Mark as reimbursable"
+                        />
+                      </td>
+
+                      {/* Skip toggle */}
+                      <td className="px-2 py-1.5 text-center">
+                        <button
+                          onClick={() => onUpdate(txn.temp_id, { skip: !txn.skip })}
+                          title={txn.skip ? 'Include this transaction' : 'Skip this transaction'}
+                          className="text-muted-foreground/40 hover:text-destructive transition-colors"
+                        >
+                          {txn.skip
+                            ? <RefreshCw className="w-3 h-3" />
+                            : <X className="w-3 h-3" />
+                          }
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Detected institution */}
+      <p className="text-xs text-muted-foreground">
+        Detected: <span className="font-medium text-foreground">{result.institution}</span>
+        {' · '}Click a direction badge to flip debit/credit · Click a category to change it
+      </p>
+
+      {/* Commit button */}
+      <Button
+        onClick={onCommit}
+        disabled={committing || included.length === 0}
+        className="w-full gap-2"
+        size="sm"
+      >
+        {committing
+          ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving to database…</>
+          : <><CheckCircle2 className="w-4 h-4" /> Commit {included.length} transaction{included.length !== 1 ? 's' : ''}</>
+        }
+      </Button>
+    </div>
+  )
 }
 
 // ── Upload Tab ────────────────────────────────────────────────────────────────
@@ -151,6 +360,7 @@ function UploadTab() {
     addFiles(Array.from(e.dataTransfer.files))
   }
 
+  /** Phase 1: parse + AI categorise (no DB write) */
   const handleUploadAll = async () => {
     const pending = files.filter(e => e.status === 'pending')
     for (const entry of pending) {
@@ -159,38 +369,65 @@ function UploadTab() {
         const fd = new FormData()
         fd.append('file', entry.file)
         if (entry.account_id) fd.append('account_id', entry.account_id)
-        const endpoint = entry.file.name.endsWith('.csv') ? '/import/upload-csv' : '/import/upload-pdf'
-        const r = await api.post<UploadResult>(endpoint, fd, {
+        const r = await api.post<StagingResult>('/import/parse-preview', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
         setFiles(prev => prev.map(e =>
-          e.id === entry.id ? { ...e, status: 'preview', uploadResult: r.data } : e
+          e.id === entry.id
+            ? {
+                ...e,
+                status: 'staging',
+                stagingResult: r.data,
+                // Initialise the working copy from what the API returned
+                stagedTxns: r.data.transactions.map(t => ({ ...t })),
+              }
+            : e
         ))
       } catch (err: unknown) {
         const e2 = err as { response?: { data?: { detail?: string } } }
         setFiles(prev => prev.map(e =>
-          e.id === entry.id ? { ...e, status: 'error', error: e2?.response?.data?.detail || 'Upload failed' } : e
+          e.id === entry.id
+            ? { ...e, status: 'error', error: e2?.response?.data?.detail ?? 'Upload failed' }
+            : e
         ))
       }
     }
   }
 
-  const handleConfirm = async (entry: FileEntry) => {
-    if (!entry.uploadResult) return
-    setFileField(entry.id, 'status', 'confirming')
+  /** Update a single staged transaction (category, direction, skip, etc.) */
+  const handleUpdateTxn = (fileId: string, tempId: string, changes: Partial<StagingTransaction>) => {
+    setFiles(prev => prev.map(entry => {
+      if (entry.id !== fileId || !entry.stagedTxns) return entry
+      return {
+        ...entry,
+        stagedTxns: entry.stagedTxns.map(t =>
+          t.temp_id === tempId ? { ...t, ...changes } : t
+        ),
+      }
+    }))
+  }
+
+  /** Phase 2: commit reviewed transactions to the DB */
+  const handleCommit = async (entry: FileEntry) => {
+    if (!entry.stagingResult || !entry.stagedTxns) return
+    setFileField(entry.id, 'status', 'committing')
     try {
-      const r = await api.post<ConfirmResult>('/import/confirm', {
-        batch_id: entry.uploadResult.batch_id,
-        accept_all: true,
+      const r = await api.post<CommitResult>('/import/commit', {
+        filename: entry.stagingResult.filename,
+        institution: entry.stagingResult.institution,
+        account_id: entry.account_id || null,
+        transactions: entry.stagedTxns,
       })
       setFiles(prev => prev.map(e =>
-        e.id === entry.id ? { ...e, status: 'done', confirmResult: r.data } : e
+        e.id === entry.id ? { ...e, status: 'done', commitResult: r.data } : e
       ))
       fetchHistory()
     } catch (err: unknown) {
       const e2 = err as { response?: { data?: { detail?: string } } }
       setFiles(prev => prev.map(e =>
-        e.id === entry.id ? { ...e, status: 'error', error: e2?.response?.data?.detail || 'Confirm failed' } : e
+        e.id === entry.id
+          ? { ...e, status: 'error', error: e2?.response?.data?.detail ?? 'Commit failed' }
+          : e
       ))
     }
   }
@@ -205,7 +442,9 @@ function UploadTab() {
           <CardTitle className="flex items-center gap-2 text-base">
             <Upload className="w-4 h-4 text-primary" /> Upload Statements
           </CardTitle>
-          <CardDescription>Drop PDF bank statements or CSV files — multiple files supported</CardDescription>
+          <CardDescription>
+            Drop PDF bank statements or CSV files — transactions are staged for your review before anything is saved
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <motion.div
@@ -227,7 +466,9 @@ function UploadTab() {
             <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
             <p className="font-medium">Drop PDF statements or CSV files here</p>
             <p className="text-sm text-muted-foreground mt-1">or click to browse</p>
-            <p className="text-xs text-muted-foreground mt-2">Supports Chase, Bank of America, American Express, Apple Pay CSV</p>
+            <p className="text-xs text-muted-foreground mt-2">
+              Chase · BofA · Amex · Apple Pay · ICICI · HDFC · and more
+            </p>
           </motion.div>
 
           {/* File list */}
@@ -251,18 +492,19 @@ function UploadTab() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate">{entry.file.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {detectInstitution(entry.file.name)} · {formatFileSize(entry.file.size)}
+                          {formatFileSize(entry.file.size)}
+                          {entry.stagingResult && ` · ${entry.stagingResult.institution}`}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        {entry.status === 'uploading' || entry.status === 'confirming'
+                        {entry.status === 'uploading' || entry.status === 'committing'
                           ? <Loader2 className="w-4 h-4 animate-spin text-primary" />
                           : entry.status === 'done'
                           ? <CheckCircle2 className="w-4 h-4 text-green-500" />
                           : entry.status === 'error'
                           ? <AlertCircle className="w-4 h-4 text-destructive" />
-                          : entry.status === 'preview'
-                          ? <Eye className="w-4 h-4 text-primary" />
+                          : entry.status === 'staging'
+                          ? <Tag className="w-4 h-4 text-amber-500" />
                           : <CheckCircle2 className="w-4 h-4 text-muted-foreground/40" />
                         }
                         {entry.status !== 'done' && (
@@ -273,8 +515,8 @@ function UploadTab() {
                       </div>
                     </div>
 
-                    {/* Account selector — only show for pending / preview */}
-                    {(entry.status === 'pending' || entry.status === 'preview') && (
+                    {/* Account selector — show until committed */}
+                    {(entry.status === 'pending' || entry.status === 'staging') && (
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground w-24 flex-shrink-0">Account:</span>
                         <select
@@ -292,72 +534,54 @@ function UploadTab() {
                       </div>
                     )}
 
-                    {/* Error message */}
+                    {/* Uploading status */}
+                    {entry.status === 'uploading' && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Parsing & categorising — this may take a moment…
+                      </p>
+                    )}
+
+                    {/* Error */}
                     {entry.status === 'error' && entry.error && (
                       <p className="text-xs text-destructive flex items-center gap-1">
                         <AlertCircle className="w-3.5 h-3.5" /> {entry.error}
                       </p>
                     )}
 
-                    {/* Preview table */}
-                    {entry.status === 'preview' && entry.uploadResult && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                            Preview — {entry.uploadResult.total} transactions
-                            {entry.uploadResult.institution && ` · ${entry.uploadResult.institution}`}
-                          </p>
-                          {entry.uploadResult.preview.length < entry.uploadResult.total && (
-                            <p className="text-xs text-muted-foreground">
-                              Showing {entry.uploadResult.preview.length} of {entry.uploadResult.total}
-                            </p>
-                          )}
-                        </div>
-                        <div className="rounded-md border overflow-hidden">
-                          <div className="overflow-x-auto">
-                            <div className="max-h-56 overflow-y-auto">
-                              <table className="w-full text-xs">
-                                <thead className="sticky top-0 bg-muted/90 backdrop-blur-sm">
-                                  <tr className="border-b">
-                                    <th className="text-left px-3 py-2 font-medium">#</th>
-                                    <th className="text-left px-3 py-2 font-medium">Date</th>
-                                    <th className="text-left px-3 py-2 font-medium">Description</th>
-                                    <th className="text-right px-3 py-2 font-medium">Amount</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {entry.uploadResult.preview.map((tx, i) => (
-                                    <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
-                                      <td className="px-3 py-1.5 text-muted-foreground/50">{i + 1}</td>
-                                      <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{tx.date}</td>
-                                      <td className="px-3 py-1.5 max-w-[220px] truncate" title={tx.description}>{tx.description}</td>
-                                      <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${tx.direction === 'credit' ? 'text-green-500' : ''}`}>
-                                        {tx.direction === 'credit' ? '+' : '−'}${Math.abs(tx.amount).toFixed(2)}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        </div>
-                        <Button size="sm" onClick={() => handleConfirm(entry)} className="w-full">
-                          <CheckCircle2 className="w-4 h-4" />
-                          Import {entry.uploadResult.total} transaction{entry.uploadResult.total !== 1 ? 's' : ''}
-                        </Button>
-                      </div>
+                    {/* Staging review */}
+                    {entry.status === 'staging' && entry.stagingResult && entry.stagedTxns && (
+                      <StagingReview
+                        result={entry.stagingResult}
+                        stagedTxns={entry.stagedTxns}
+                        onUpdate={(tempId, changes) => handleUpdateTxn(entry.id, tempId, changes)}
+                        onCommit={() => handleCommit(entry)}
+                        committing={false}
+                      />
                     )}
 
-                    {/* Done result */}
-                    {entry.status === 'done' && entry.confirmResult && (
+                    {/* Committing */}
+                    {entry.status === 'committing' && entry.stagingResult && entry.stagedTxns && (
+                      <StagingReview
+                        result={entry.stagingResult}
+                        stagedTxns={entry.stagedTxns}
+                        onUpdate={() => {}}
+                        onCommit={() => {}}
+                        committing={true}
+                      />
+                    )}
+
+                    {/* Done */}
+                    {entry.status === 'done' && entry.commitResult && (
                       <div className="flex items-center gap-4 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1 text-green-500">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          {entry.confirmResult.imported} imported
+                          {entry.commitResult.imported} imported
                         </span>
-                        {entry.confirmResult.duplicates > 0 && (
-                          <span>{entry.confirmResult.duplicates} duplicates skipped</span>
+                        {entry.commitResult.duplicates > 0 && (
+                          <span>{entry.commitResult.duplicates} duplicates skipped</span>
                         )}
+                        <span>{entry.commitResult.institution}</span>
                       </div>
                     )}
                   </motion.div>
@@ -367,7 +591,7 @@ function UploadTab() {
               {hasPending && (
                 <Button onClick={handleUploadAll} className="w-full">
                   <Upload className="w-4 h-4" />
-                  Upload & Parse {files.filter(e => e.status === 'pending').length} file(s)
+                  Parse & Stage {files.filter(e => e.status === 'pending').length} file(s)
                 </Button>
               )}
             </div>
@@ -432,6 +656,28 @@ function UploadTab() {
 
 type ReviewAction = 'accept' | 'edit' | 'reject'
 
+interface QueueTransaction {
+  id: string
+  description: string
+  amount: number
+  date: string
+  direction: 'debit' | 'credit'
+  ai_category: string | null
+  ai_subcategory: string | null
+  ai_confidence: number | null
+  ai_flags: string[]
+  category: string | null
+  subcategory: string | null
+  merchant: string | null
+  need_want_savings: string | null
+  fixed_variable: string | null
+  personal_work_shared: string | null
+  is_reimbursable: boolean
+  is_recurring: boolean
+  tags: string[]
+  batch_id: string | null
+}
+
 interface ReviewRow extends QueueTransaction {
   localAction?: ReviewAction
   editedCategory?: string
@@ -463,7 +709,9 @@ function ReviewQueueTab() {
     setSaving(prev => new Set(prev).add(id))
     try {
       await api.post(`/import/review-queue/${id}`, { action, category })
-      setRows(prev => prev.map(r => r.id === id ? { ...r, localAction: action, editedCategory: category ?? r.editedCategory } : r))
+      setRows(prev => prev.map(r =>
+        r.id === id ? { ...r, localAction: action, editedCategory: category ?? r.editedCategory } : r
+      ))
     } catch {
       // silently fail — row stays actionable
     } finally {
@@ -480,9 +728,9 @@ function ReviewQueueTab() {
     }
   }
 
-  const low = rows.filter(r => (r.ai_confidence ?? 0) < 0.75)
+  const low    = rows.filter(r => (r.ai_confidence ?? 0) < 0.75)
   const medium = rows.filter(r => { const c = r.ai_confidence ?? 0; return c >= 0.75 && c < 0.90 })
-  const clean = rows.filter(r => (r.ai_confidence ?? 0) >= 0.90)
+  const clean  = rows.filter(r => (r.ai_confidence ?? 0) >= 0.90)
   const pendingClean = clean.filter(r => !r.localAction).length
 
   if (loading) {
@@ -519,7 +767,6 @@ function ReviewQueueTab() {
 
   return (
     <div className="space-y-4">
-      {/* Bulk action */}
       {pendingClean > 0 && (
         <div className="flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-3">
           <p className="text-sm text-green-600 dark:text-green-400">
@@ -532,45 +779,22 @@ function ReviewQueueTab() {
         </div>
       )}
 
-      {/* Low confidence */}
       {low.length > 0 && (
         <ReviewSection
-          title="Low Confidence"
-          emoji="🔴"
-          subtitle="< 75% confidence — requires manual review"
-          rows={low}
-          saving={saving}
-          editingId={editingId}
-          setEditingId={setEditingId}
-          onAction={applyAction}
+          title="Low Confidence" emoji="🔴" subtitle="< 75% confidence — requires manual review"
+          rows={low} saving={saving} editingId={editingId} setEditingId={setEditingId} onAction={applyAction}
         />
       )}
-
-      {/* Needs review */}
       {medium.length > 0 && (
         <ReviewSection
-          title="Needs Review"
-          emoji="🟡"
-          subtitle="75–89% confidence"
-          rows={medium}
-          saving={saving}
-          editingId={editingId}
-          setEditingId={setEditingId}
-          onAction={applyAction}
+          title="Needs Review" emoji="🟡" subtitle="75–89% confidence"
+          rows={medium} saving={saving} editingId={editingId} setEditingId={setEditingId} onAction={applyAction}
         />
       )}
-
-      {/* Clean */}
       {clean.length > 0 && (
         <ReviewSection
-          title="Clean"
-          emoji="✅"
-          subtitle="≥ 90% confidence"
-          rows={clean}
-          saving={saving}
-          editingId={editingId}
-          setEditingId={setEditingId}
-          onAction={applyAction}
+          title="Clean" emoji="✅" subtitle="≥ 90% confidence"
+          rows={clean} saving={saving} editingId={editingId} setEditingId={setEditingId} onAction={applyAction}
         />
       )}
     </div>
@@ -578,13 +802,9 @@ function ReviewQueueTab() {
 }
 
 interface ReviewSectionProps {
-  title: string
-  emoji: string
-  subtitle: string
-  rows: ReviewRow[]
-  saving: Set<string>
-  editingId: string | null
-  setEditingId: (id: string | null) => void
+  title: string; emoji: string; subtitle: string
+  rows: ReviewRow[]; saving: Set<string>
+  editingId: string | null; setEditingId: (id: string | null) => void
   onAction: (id: string, action: ReviewAction, category?: string) => void
 }
 
@@ -595,10 +815,7 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
   return (
     <Card>
       <CardHeader className="pb-2">
-        <button
-          className="flex items-center justify-between w-full text-left"
-          onClick={() => setCollapsed(v => !v)}
-        >
+        <button className="flex items-center justify-between w-full text-left" onClick={() => setCollapsed(v => !v)}>
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <span>{emoji}</span> {title}
             <span className="font-normal text-muted-foreground">({rows.length})</span>
@@ -630,14 +847,14 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                   const isEditing = editingId === row.id
                   const done = Boolean(row.localAction)
                   const conf = row.ai_confidence ?? 0
-                  const confColor = conf < 0.75 ? 'text-red-500' : conf < 0.90 ? 'text-yellow-500' : 'text-green-500'
+                  const cColor = conf < 0.75 ? 'text-red-500' : conf < 0.90 ? 'text-yellow-500' : 'text-green-500'
 
                   return (
                     <tr key={row.id} className={`hover:bg-muted/30 ${done ? 'opacity-50' : ''}`}>
                       <td className="py-2.5 pr-3 text-muted-foreground text-xs whitespace-nowrap">{row.date}</td>
                       <td className="py-2.5 pr-3 max-w-[200px] truncate">{row.description}</td>
-                      <td className={`py-2.5 pr-3 text-right tabular-nums font-medium ${row.direction === 'credit' ? 'text-green-500' : ''}`}>
-                        {row.direction === 'credit' ? '+' : '-'}${Math.abs(row.amount).toFixed(2)}
+                      <td className={`py-2.5 pr-3 text-right tabular-nums font-medium whitespace-nowrap ${row.direction === 'credit' ? 'text-green-500' : ''}`}>
+                        {fmtAmount(row.amount, row.direction)}
                       </td>
                       <td className="py-2.5 pr-3">
                         {isEditing ? (
@@ -656,7 +873,7 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                           </span>
                         )}
                       </td>
-                      <td className={`py-2.5 pr-3 text-right text-xs font-medium tabular-nums ${confColor}`}>
+                      <td className={`py-2.5 pr-3 text-right text-xs font-medium tabular-nums ${cColor}`}>
                         {(conf * 100).toFixed(0)}%
                       </td>
                       <td className="py-2.5">
@@ -666,14 +883,8 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                           <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                         ) : isEditing ? (
                           <div className="flex items-center gap-1">
-                            <Button
-                              size="sm"
-                              className="h-6 text-xs px-2"
-                              onClick={() => {
-                                onAction(row.id, 'edit', editCategories[row.id] ?? row.ai_category ?? undefined)
-                                setEditingId(null)
-                              }}
-                            >
+                            <Button size="sm" className="h-6 text-xs px-2"
+                              onClick={() => { onAction(row.id, 'edit', editCategories[row.id] ?? row.ai_category ?? undefined); setEditingId(null) }}>
                               Save
                             </Button>
                             <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditingId(null)}>
@@ -682,29 +893,19 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
                           </div>
                         ) : (
                           <div className="flex items-center gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
+                            <Button size="sm" variant="outline"
                               className="h-6 text-xs px-2 text-green-600 border-green-500/30 hover:bg-green-500/10"
-                              onClick={() => onAction(row.id, 'accept')}
-                            >
+                              onClick={() => onAction(row.id, 'accept')}>
                               Accept
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 text-xs px-2"
-                              onClick={() => setEditingId(row.id)}
-                            >
+                            <Button size="sm" variant="outline" className="h-6 text-xs px-2"
+                              onClick={() => setEditingId(row.id)}>
                               Edit
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
+                            <Button size="sm" variant="outline"
                               className="h-6 text-xs px-2 text-destructive border-destructive/30 hover:bg-destructive/10"
-                              onClick={() => onAction(row.id, 'reject')}
-                            >
-                              Reject
+                              onClick={() => onAction(row.id, 'reject')}>
+                              Rej
                             </Button>
                           </div>
                         )}
@@ -721,21 +922,23 @@ function ReviewSection({ title, emoji, subtitle, rows, saving, editingId, setEdi
   )
 }
 
-// ── Sidebar info ──────────────────────────────────────────────────────────────
+// ── Sidebar ───────────────────────────────────────────────────────────────────
 
 const SUPPORTED_BANKS = [
-  { name: 'Chase', type: 'PDF', status: 'supported' },
-  { name: 'Bank of America', type: 'PDF', status: 'supported' },
-  { name: 'American Express', type: 'PDF', status: 'supported' },
-  { name: 'Apple Pay (iOS Shortcut)', type: 'CSV', status: 'supported' },
-  { name: 'Other Banks', type: 'PDF', status: 'generic' },
+  { name: 'Chase',                type: 'PDF + CSV', status: 'supported' },
+  { name: 'Bank of America',      type: 'PDF + CSV', status: 'supported' },
+  { name: 'American Express',     type: 'PDF + CSV', status: 'supported' },
+  { name: 'ICICI Bank',           type: 'PDF + CSV', status: 'supported' },
+  { name: 'HDFC Bank',            type: 'PDF + CSV', status: 'supported' },
+  { name: 'Apple Pay',            type: 'CSV',       status: 'supported' },
+  { name: 'Other Banks',          type: 'PDF + CSV', status: 'generic'   },
 ]
 
 const HOW_IT_WORKS = [
-  { step: 1, title: 'Upload statement', desc: 'Drop your PDF bank statement or Apple Pay CSV' },
-  { step: 2, title: 'Auto-detection', desc: 'We detect your bank and parse the transactions' },
-  { step: 3, title: 'AI categorization', desc: 'Transactions are categorized automatically' },
-  { step: 4, title: 'Review & confirm', desc: 'Review flagged items and confirm the import' },
+  { step: 1, title: 'Upload statement',     desc: 'Drop your PDF bank statement or CSV export' },
+  { step: 2, title: 'Parse & categorise',   desc: 'Bank is auto-detected; AI categorises each transaction' },
+  { step: 3, title: 'Review & edit',        desc: 'Fix directions, categories, mark reimbursables — nothing saved yet' },
+  { step: 4, title: 'Commit',               desc: 'Click "Commit" and transactions are written to the database' },
 ]
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -749,7 +952,7 @@ export function Import() {
     <MainLayout>
       <TopBar
         title="Import Statements"
-        subtitle="Import bank PDFs or your Apple Pay CSV to add transactions"
+        subtitle="Parse, review, and commit — nothing is saved until you confirm"
       />
 
       <motion.div
@@ -760,7 +963,6 @@ export function Import() {
       >
         {/* Main content */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Tab strip */}
           <div className="flex gap-1 border-b pb-0">
             {([
               { id: 'upload' as ImportTab, label: 'Upload' },
@@ -838,7 +1040,8 @@ export function Import() {
           <Card className="bg-primary/5 border-primary/20">
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                <strong className="text-foreground">Privacy first:</strong> Raw PDFs never leave your machine. Only sanitized data (no account numbers, names, or IDs) is sent to AI for categorization.
+                <strong className="text-foreground">Privacy first:</strong> Raw PDFs are parsed locally. Only aggregated
+                statistics (never account numbers, names, or transaction IDs) are sent to AI for categorisation.
               </p>
             </CardContent>
           </Card>

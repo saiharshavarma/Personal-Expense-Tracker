@@ -271,7 +271,7 @@ function OptInGate({ hasKey }: { hasKey: boolean }) {
 
 export function FinanceAdvisor() {
   const [range, setRange] = useState<DateRange>(defaultRange)
-  const [excludeReimbursable, setExcludeReimbursable] = useState(true)
+  const [excludeReimbursable, setExcludeReimbursable] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AdvisorResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
