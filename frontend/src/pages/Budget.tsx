@@ -381,6 +381,13 @@ export function Budget() {
     : { needs: 50, wants: 30, savings: 20 }
 
   const rows = data?.rows ?? []
+
+  // Categories that have an explicit parent-level budget row in this list.
+  // Used to decide whether a subcategory row should be indented under its parent
+  // or shown as a standalone row (when no parent budget exists).
+  const categoriesWithParentRow = new Set(
+    rows.filter(r => !r.subcategory).map(r => r.category)
+  )
   const totals = data?.totals ?? { budget: 0, gross_spend: 0, reimbursed: 0, net_personal: 0, remaining: 0 }
   const nws = data?.nws_summary ?? {
     income: 0,
@@ -645,6 +652,11 @@ export function Budget() {
 
             <AnimatePresence initial={false}>
               {rows.map(row => {
+                // A subcategory row is "anchored" when its parent category also has
+                // a budget row directly above it — in that case keep the indent style.
+                // If there is NO parent row (orphaned subcategory), show it as a
+                // top-level row so the list stays visually uniform.
+                const isAnchored = !!row.subcategory && categoriesWithParentRow.has(row.category)
                 const barColor = (STATUS_CONFIG[row.status] ?? STATUS_CONFIG.unbudgeted).bar
                 const rowKey = `${row.category}|${row.subcategory ?? ''}`
                 return (
@@ -652,7 +664,7 @@ export function Budget() {
                     key={rowKey}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className={`group ${row.subcategory ? 'bg-muted/20' : ''}`}
+                    className={`group ${isAnchored ? 'bg-muted/20' : ''}`}
                   >
                     <div
                       className="grid gap-4 px-4 py-3 items-center border-b last:border-0 hover:bg-accent/50 transition-colors"
@@ -661,20 +673,24 @@ export function Budget() {
                       {/* Category / subcategory name + progress bar */}
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          {row.subcategory ? (
-                            /* Subcategory row: indented with connector */
+                          {isAnchored ? (
+                            /* Indented subcategory under a visible parent row */
                             <span className="ml-4 w-2 h-2 rounded-full flex-shrink-0 border-2 border-current opacity-50" />
                           ) : (
-                            // M-3: getCategoryColor returns Tailwind class strings — use className, not style.backgroundColor
+                            /* Top-level row (category or orphaned subcategory) */
                             <span
                               className={`w-2 h-2 rounded-full flex-shrink-0 ${getCategoryColor(row.category)}`}
                             />
                           )}
                           <div className="min-w-0">
-                            {row.subcategory ? (
+                            {isAnchored ? (
+                              /* Anchored subcategory: compact label, parent already visible above */
+                              <span className="text-sm font-medium truncate">{row.subcategory}</span>
+                            ) : row.subcategory ? (
+                              /* Orphaned subcategory: subcategory name is the headline, parent is the subtitle */
                               <div>
-                                <span className="text-xs text-muted-foreground">{row.category} › </span>
-                                <span className="text-sm font-medium truncate">{row.subcategory}</span>
+                                <span className="text-sm font-medium truncate block">{row.subcategory}</span>
+                                <span className="text-xs text-muted-foreground">{row.category}</span>
                               </div>
                             ) : (
                               <span className="text-sm font-medium truncate">{row.category}</span>
@@ -682,7 +698,7 @@ export function Budget() {
                           </div>
                         </div>
                         {row.budget_amount > 0 && (
-                          <div className={`relative h-1.5 rounded-full bg-secondary overflow-hidden ${row.subcategory ? 'ml-6' : ''}`}>
+                          <div className={`relative h-1.5 rounded-full bg-secondary overflow-hidden ${isAnchored ? 'ml-6' : ''}`}>
                             <div
                               className={`absolute left-0 top-0 h-full rounded-full transition-all ${barColor}`}
                               style={{ width: `${Math.min(row.pct_used, 100)}%` }}

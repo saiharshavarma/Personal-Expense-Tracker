@@ -1,17 +1,22 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Shield, Fingerprint, Eye, EyeOff, Lock } from 'lucide-react'
+import { Shield, Fingerprint, Eye, EyeOff, Lock, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/store'
 
 export function LockScreen() {
-  const { login, loginWithTouchId, isLoading, error, clearError, status } = useAuthStore()
+  const { login, loginWithTouchId, resetPasswordWithRecoveryToken, isLoading, error, clearError, status } = useAuthStore()
   const [mode, setMode] = useState<'touchid' | 'password'>(
     status?.has_webauthn ? 'touchid' : 'password'
   )
   const [password, setPassword] = useState('')
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetConfirm, setResetConfirm] = useState('')
+  const [recoveryToken, setRecoveryToken] = useState('')
+  const [resetError, setResetError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [touchIdError, setTouchIdError] = useState<string | null>(null)
 
@@ -38,6 +43,25 @@ export function LockScreen() {
         setTouchIdError('Touch ID failed. Try your password.')
         setMode('password')
       }
+    }
+  }
+
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setResetError(null)
+    clearError()
+    if (resetPassword.length < 12) {
+      setResetError('Password must be at least 12 characters')
+      return
+    }
+    if (resetPassword !== resetConfirm) {
+      setResetError('Passwords do not match')
+      return
+    }
+    try {
+      await resetPasswordWithRecoveryToken(resetPassword, resetConfirm, recoveryToken)
+    } catch {
+      // store error is shown below
     }
   }
 
@@ -148,6 +172,86 @@ export function LockScreen() {
                       Use Touch ID Instead
                     </button>
                   </div>
+                )}
+
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => { setResetOpen((v) => !v); clearError(); setResetError(null) }}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
+                {resetOpen && (
+                  <motion.form
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    onSubmit={handleReset}
+                    className="mt-4 space-y-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4"
+                  >
+                    <div className="flex gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
+                      <div>
+                        <p className="text-sm font-medium text-destructive">Reset password</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          Enter the recovery token you saved when you created this app. Your local finance data will be preserved.
+                        </p>
+                      </div>
+                    </div>
+
+                    {!status?.has_recovery_token && (
+                      <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+                        This app does not have a recovery token configured. Sign in with your password or Touch ID, then generate one in Settings.
+                      </p>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="recovery-token" className="text-xs">Recovery token</Label>
+                      <Input
+                        id="recovery-token"
+                        value={recoveryToken}
+                        onChange={(e) => setRecoveryToken(e.target.value)}
+                        placeholder="FD-RECOVERY-..."
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="reset-password" className="text-xs">New password</Label>
+                      <Input
+                        id="reset-password"
+                        type="password"
+                        value={resetPassword}
+                        onChange={(e) => setResetPassword(e.target.value)}
+                        placeholder="At least 12 characters"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="reset-confirm" className="text-xs">Confirm new password</Label>
+                      <Input
+                        id="reset-confirm"
+                        type="password"
+                        value={resetConfirm}
+                        onChange={(e) => setResetConfirm(e.target.value)}
+                      />
+                    </div>
+
+                    {(resetError || error) && (
+                      <p className="text-xs text-destructive">{resetError || error}</p>
+                    )}
+
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={isLoading || !recoveryToken.trim() || !status?.has_recovery_token}
+                    >
+                      {isLoading ? 'Resetting…' : 'Reset Password'}
+                    </Button>
+                  </motion.form>
                 )}
               </form>
             </motion.div>

@@ -547,16 +547,20 @@ function CategoryBarChart({ month, year, excludeReimbursable }: { month: number;
       .finally(() => setLoading(false))
   }, [month, year, excludeReimbursable])
 
-  if (loading) return <Skeleton className="h-48 w-full" />
+  // Size the chart to its content so there's no dead whitespace.
+  // 36px per bar (bar + gaps) + 28px for the XAxis tick labels at the bottom.
+  const chartHeight = data.length * 36 + 28
+
+  if (loading) return <Skeleton className="w-full" style={{ height: chartHeight }} />
   if (!data.length) return (
-    <div className="h-48 flex items-center justify-center text-xs text-muted-foreground">
+    <div className="flex items-center justify-center text-xs text-muted-foreground" style={{ height: chartHeight }}>
       No spending data for this month
     </div>
   )
 
   return (
-    <ResponsiveContainer width="100%" height={192}>
-      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
+    <ResponsiveContainer width="100%" height={chartHeight}>
+      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={DASH_GRID} strokeOpacity={0.4} />
         <XAxis type="number" tick={DASH_TICK_SM} tickLine={false} axisLine={false}
           tickFormatter={(v) => formatCurrency(v)} />
@@ -566,7 +570,7 @@ function CategoryBarChart({ month, year, excludeReimbursable }: { month: number;
           contentStyle={{ fontSize: 11, borderRadius: 8 }}
           cursor={{ fill: 'rgba(100,100,100,0.07)' }}
         />
-        <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={16}>
+        <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={20}>
           {data.map((_: CategoryItem, i: number) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
         </Bar>
       </BarChart>
@@ -761,7 +765,7 @@ export function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         {/* Category breakdown — spans 2 cols */}
         <motion.div className="lg:col-span-2" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-          <Card className="h-full">
+          <Card className="h-full flex flex-col">
             <CardHeader className="pb-2 pt-4 px-5">
               <div className="flex items-center gap-1">
                 <CardTitle className="text-sm font-medium">Spend by Category</CardTitle>
@@ -769,7 +773,7 @@ export function Dashboard() {
               </div>
               <p className="text-xs text-muted-foreground">{monthName(month)} {year}</p>
             </CardHeader>
-            <CardContent className="pb-4 px-5">
+            <CardContent className="pb-4 px-5 flex-1 min-h-0">
               <CategoryBarChart month={month} year={year} excludeReimbursable={excludeReimbursable} />
             </CardContent>
           </Card>

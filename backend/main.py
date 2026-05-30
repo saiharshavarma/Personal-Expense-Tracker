@@ -17,6 +17,8 @@ _MIGRATIONS = [
     "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD'",
     # 2026-05: Global budget templates for monthly budget defaults
     "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS budget_templates JSONB DEFAULT '[]'::jsonb",
+    # 2026-05: Local password recovery token hash
+    "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS recovery_token_hash TEXT",
     # 2026-05: Budget subcategory support
     "ALTER TABLE budgets ADD COLUMN IF NOT EXISTS subcategory VARCHAR(100)",
     # Drop old unique constraint so partial indexes can take over

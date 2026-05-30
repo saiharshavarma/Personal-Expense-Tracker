@@ -45,6 +45,8 @@ interface NavItem {
   badge?: number
 }
 
+const navPulseRoutes = new Set(['/transactions', '/import', '/reimbursements', '/advisor'])
+
 function useNavItems() {
   const { needsReviewCount, importQueueCount } = useUIStore()
   return [
@@ -135,16 +137,26 @@ export function Sidebar() {
                 key={to}
                 to={to}
                 className={cn(
-                  'flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium transition-colors group',
+                  'relative flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium transition-[background-color,color,transform] duration-150 group hover:-translate-y-px active:translate-y-0',
                   isActive
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                   sidebarCollapsed && 'justify-center px-2'
                 )}
               >
+                {isActive && (
+                  <motion.span
+                    layoutId="sidebar-active-pill"
+                    className="absolute inset-0 -z-10 rounded-lg bg-primary"
+                    transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                  />
+                )}
                 {/* Icon — show a dot when collapsed and badge > 0 */}
                 <span className="relative flex-shrink-0">
                   <Icon className={cn('w-4 h-4', isActive && 'text-primary-foreground')} />
+                  {!isActive && navPulseRoutes.has(to) && (
+                    <span className="live-dot absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  )}
                   {sidebarCollapsed && badge != null && badge > 0 && (
                     <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500" />
                   )}
@@ -254,14 +266,24 @@ export function MobileNav() {
               key={to}
               to={to}
               className={cn(
-                'relative flex h-12 min-w-[68px] flex-col items-center justify-center gap-1 rounded-lg px-2 text-[10px] font-medium transition-colors',
+                'relative flex h-12 min-w-[68px] flex-col items-center justify-center gap-1 rounded-lg px-2 text-[10px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.98]',
                 isActive
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground'
               )}
             >
+              {isActive && (
+                <motion.span
+                  layoutId="mobile-active-pill"
+                  className="absolute inset-0 -z-10 rounded-lg bg-primary"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              )}
               <span className="relative">
                 <Icon className="h-4 w-4" />
+                {!isActive && navPulseRoutes.has(to) && (
+                  <span className="live-dot absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                )}
                 {badge != null && badge > 0 && (
                   <span className="absolute -right-2 -top-2 min-w-[16px] rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-4 text-white">
                     {badge > 99 ? '99+' : badge}

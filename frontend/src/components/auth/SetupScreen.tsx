@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Shield, Fingerprint, Eye, EyeOff, ArrowRight, CheckCircle2 } from 'lucide-react'
+import { Shield, Fingerprint, Eye, EyeOff, ArrowRight, CheckCircle2, Copy, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,25 +13,39 @@ export function SetupScreen() {
   const [confirm, setConfirm] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [enableTouchId, setEnableTouchId] = useState(true)
-  const [step, setStep] = useState<'setup' | 'touchid' | 'done'>('setup')
+  const [step, setStep] = useState<'setup' | 'recovery' | 'touchid' | 'done'>('setup')
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(null)
+  const [copiedRecovery, setCopiedRecovery] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
 
   const handleSetup = async (e: React.FormEvent) => {
     e.preventDefault()
     setLocalError(null)
     clearError()
-    if (password.length < 6) { setLocalError('Password must be at least 6 characters'); return }
+    if (password.length < 12) { setLocalError('Password must be at least 12 characters'); return }
     if (password !== confirm) { setLocalError('Passwords do not match'); return }
     try {
-      await setupPassword(password, confirm)
-      if (enableTouchId) {
-        setStep('touchid')
-      } else {
-        setStep('done')
-      }
+      const token = await setupPassword(password, confirm)
+      setRecoveryToken(token)
+      setStep('recovery')
     } catch {
       // error shown via store
     }
+  }
+
+  const handleCopyRecoveryToken = async () => {
+    if (!recoveryToken) return
+    try {
+      await navigator.clipboard.writeText(recoveryToken)
+      setCopiedRecovery(true)
+      setTimeout(() => setCopiedRecovery(false), 2000)
+    } catch {
+      setCopiedRecovery(false)
+    }
+  }
+
+  const continueAfterRecovery = () => {
+    setStep(enableTouchId ? 'touchid' : 'done')
   }
 
   const handleEnrollTouchId = async () => {
@@ -50,6 +64,47 @@ export function SetupScreen() {
       return () => clearTimeout(t)
     }
   }, [step, completeSetup])
+
+  if (step === 'recovery') {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="min-h-screen flex items-center justify-center bg-background"
+      >
+        <div className="w-full max-w-md mx-auto px-6 space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-600 mx-auto">
+              <KeyIcon />
+            </div>
+            <h2 className="text-2xl font-semibold">Save Your Recovery Token</h2>
+            <p className="text-sm text-muted-foreground">
+              This token can reset your password later without deleting your local finance data. It is shown only once.
+            </p>
+          </div>
+
+          <div className="rounded-lg border bg-muted/40 p-4 space-y-3">
+            <div className="flex gap-2 text-sm text-amber-600">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <p>Store this somewhere safe. The app keeps only a secure hash, so it cannot show this token again.</p>
+            </div>
+            <div className="rounded-md border bg-background p-3 font-mono text-sm break-all select-all">
+              {recoveryToken}
+            </div>
+            <Button type="button" variant="outline" className="w-full" onClick={handleCopyRecoveryToken}>
+              {copiedRecovery ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              {copiedRecovery ? 'Copied' : 'Copy Recovery Token'}
+            </Button>
+          </div>
+
+          <Button className="w-full" size="lg" onClick={continueAfterRecovery}>
+            I Saved My Recovery Token
+            <ArrowRight className="w-4 h-4" />
+          </Button>
+        </div>
+      </motion.div>
+    )
+  }
 
   if (step === 'touchid') {
     return (
@@ -133,7 +188,7 @@ export function SetupScreen() {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Minimum 6 characters"
+                placeholder="Minimum 12 characters"
                 className="pr-10"
                 autoFocus
               />
@@ -180,9 +235,13 @@ export function SetupScreen() {
         </form>
 
         <p className="text-center text-xs text-muted-foreground">
-          Your data is stored locally on this Mac only.
+          Your data is stored locally on this Mac only. Save your recovery token on the next step.
         </p>
       </div>
     </motion.div>
   )
+}
+
+function KeyIcon() {
+  return <Shield className="w-7 h-7" />
 }

@@ -239,7 +239,17 @@ def main():
 
     c = Client()
     status = c.call("GET", "/auth/status")
-    check(results, "database/settings reset produced first-run auth state", status == {"onboarding_complete": False, "has_webauthn": False, "has_password": False}, str(status))
+    check(
+        results,
+        "database/settings reset produced first-run auth state",
+        status == {
+            "onboarding_complete": False,
+            "has_webauthn": False,
+            "has_password": False,
+            "has_recovery_token": False,
+        },
+        str(status),
+    )
     c.token = c.call("POST", "/auth/setup", {"password": PASSWORD, "confirm_password": PASSWORD})["access_token"]
 
     checking = c.call("POST", "/accounts", {"name": "Everyday Checking", "type": "checking", "institution": "Local Credit Union", "last_four": "1024", "currency": "USD"})

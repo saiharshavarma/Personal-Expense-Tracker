@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import secrets
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -73,6 +74,12 @@ def _verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def _generate_recovery_token() -> str:
+    """Create a local recovery token that is shown once to the user."""
+    raw = secrets.token_urlsafe(24)
+    return f"FD-RECOVERY-{raw}"
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def create_access_token(data: dict) -> str:
@@ -121,6 +128,12 @@ class ChangePasswordRequest(BaseModel):
     confirm_new_password: str
 
 
+class ForgotPasswordResetRequest(BaseModel):
+    new_password: str
+    confirm_new_password: str
+    recovery_token: str
+
+
 class WebAuthnFinishRequest(BaseModel):
     id: str
     rawId: str
@@ -140,6 +153,7 @@ async def auth_status(db: AsyncSession = Depends(get_db)):
         "onboarding_complete": prefs.onboarding_complete,
         "has_webauthn": bool(cred.get("credential_id")),
         "has_password": bool(prefs.password_hash),
+        "has_recovery_token": bool(prefs.recovery_token_hash),
     }
 
 
@@ -154,12 +168,14 @@ async def setup(body: SetupRequest, db: AsyncSession = Depends(get_db)):
     if len(body.password) < 12:
         raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
 
+    recovery_token = _generate_recovery_token()
     prefs.password_hash = _hash_password(body.password)
+    prefs.recovery_token_hash = _hash_password(recovery_token)
     prefs.onboarding_complete = True
     await db.commit()
 
     token = create_access_token({"sub": "local-user", "type": "password"})
-    return {"access_token": token, "token_type": "bearer"}
+    return {"access_token": token, "token_type": "bearer", "recovery_token": recovery_token}
 
 
 @router.post("/login")
@@ -176,6 +192,60 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
     _reset_rate_limit(client_ip)
     token = create_access_token({"sub": "local-user", "type": "password"})
     return {"access_token": token, "token_type": "bearer"}
+
+
+@router.post("/forgot-password/reset")
+async def forgot_password_reset(
+    request: Request,
+    body: ForgotPasswordResetRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Reset the local password with the one-time recovery token created at setup.
+
+    The token itself is never stored in plaintext. Only the bcrypt hash is kept,
+    so the user must save the token when it is generated.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"reset:{client_ip}")
+
+    prefs = await get_prefs(db)
+    if not prefs.onboarding_complete:
+        raise HTTPException(status_code=400, detail="Setup has not been completed yet.")
+    if not prefs.recovery_token_hash:
+        raise HTTPException(status_code=400, detail="No recovery token is configured for this app.")
+    if not _verify_password(body.recovery_token.strip(), prefs.recovery_token_hash):
+        raise HTTPException(status_code=401, detail="Recovery token is incorrect.")
+    if body.new_password != body.confirm_new_password:
+        raise HTTPException(status_code=400, detail="New passwords do not match")
+    if len(body.new_password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
+
+    prefs.password_hash = _hash_password(body.new_password)
+    await db.commit()
+    _reset_rate_limit(f"reset:{client_ip}")
+
+    token = create_access_token({"sub": "local-user", "type": "password-reset"})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "message": "Password reset successfully. Your local finance data was preserved.",
+    }
+
+
+@router.post("/recovery-token/regenerate")
+async def regenerate_recovery_token(
+    _user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    prefs = await get_prefs(db)
+    recovery_token = _generate_recovery_token()
+    prefs.recovery_token_hash = _hash_password(recovery_token)
+    await db.commit()
+    return {
+        "recovery_token": recovery_token,
+        "message": "Save this recovery token now. It will not be shown again.",
+    }
 
 
 @router.post("/change-password")

@@ -203,11 +203,13 @@ export interface AuthStatus {
   onboarding_complete: boolean
   has_webauthn: boolean
   has_password: boolean
+  has_recovery_token: boolean
 }
 
 export interface AuthResponse {
   access_token: string
   token_type: string
+  recovery_token?: string
 }
 
 // ── Filter State ───────────────────────────────────────────────────────────────

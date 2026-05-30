@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import {
   Settings2, CreditCard, Repeat, Tag, Brain, Smartphone, Palette,
-  Database, Download, Shield, ChevronRight, Sun, Moon, Check, X,
+  Database, Download, Upload, Shield, ChevronRight, Sun, Moon, Check, X,
   Fingerprint, KeyRound, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Save,
   Copy, FileText, FileSpreadsheet, FileJson, HardDrive, Clock, RefreshCw, Trash2, Plus,
   Mail, Bell, LayoutGrid,
@@ -1026,10 +1026,13 @@ interface BackupEntry {
 
 function BackupTab() {
   const [backingUp, setBackingUp] = useState(false)
+  const [restoring, setRestoring] = useState(false)
   const [backupMsg, setBackupMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [restoreMsg, setRestoreMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [history, setHistory] = useState<BackupEntry[]>([])
   const [histLoading, setHistLoading] = useState(true)
   const [exporting, setExporting] = useState<string | null>(null)
+  const restoreInputRef = useRef<HTMLInputElement>(null)
 
   const loadHistory = useCallback(async () => {
     setHistLoading(true)
@@ -1067,6 +1070,43 @@ function BackupTab() {
       setBackupMsg({ type: 'error', text: (e as Error).message || 'Backup failed' })
     } finally {
       setBackingUp(false)
+    }
+  }
+
+  const handleRestoreFile = async (file: File | null) => {
+    if (!file) return
+    const ok = window.confirm(
+      'Restore this backup? This will replace accounts, transactions, budgets, subscriptions, trips, rules, and preferences with the backup contents. Your current login credentials are kept.'
+    )
+    if (!ok) {
+      if (restoreInputRef.current) restoreInputRef.current.value = ''
+      return
+    }
+    setRestoring(true)
+    setRestoreMsg(null)
+    try {
+      const token = localStorage.getItem('auth_token')
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`${api.defaults.baseURL}/backup/restore?confirm_restore=true`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `Restore failed: ${res.status}`)
+      }
+      const data = await res.json()
+      const txCount = data?.restored?.transactions ?? 0
+      setRestoreMsg({ type: 'success', text: `Restore complete. Restored ${txCount} transactions.` })
+      await loadHistory()
+      window.setTimeout(() => window.location.reload(), 1200)
+    } catch (e: unknown) {
+      setRestoreMsg({ type: 'error', text: (e as Error).message || 'Restore failed' })
+    } finally {
+      setRestoring(false)
+      if (restoreInputRef.current) restoreInputRef.current.value = ''
     }
   }
 
@@ -1133,6 +1173,48 @@ function BackupTab() {
                 ? <CheckCircle2 className="w-3.5 h-3.5" />
                 : <AlertCircle className="w-3.5 h-3.5" />}
               {backupMsg.text}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Restore Backup */}
+      <Card className="border-amber-500/30 bg-amber-500/5">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Upload className="w-4 h-4 text-amber-600" /> Restore Backup
+          </CardTitle>
+          <CardDescription>
+            Upload a Finance Dashboard `.json.gz` backup to replace the current local data. Login credentials are preserved.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <input
+            ref={restoreInputRef}
+            type="file"
+            accept=".gz,.json,.json.gz,application/gzip,application/json"
+            className="hidden"
+            onChange={(e) => handleRestoreFile(e.target.files?.[0] ?? null)}
+          />
+          <Button
+            onClick={() => restoreInputRef.current?.click()}
+            disabled={restoring}
+            className="w-full"
+            variant="outline"
+          >
+            {restoring
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Restoring backup…</>
+              : <><Upload className="w-4 h-4" /> Upload & Restore Backup</>}
+          </Button>
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            Restore is destructive for finance data. Download a fresh backup first if you may need to undo this.
+          </p>
+          {restoreMsg && (
+            <p className={`text-xs flex items-center gap-1 ${restoreMsg.type === 'success' ? 'text-green-600' : 'text-destructive'}`}>
+              {restoreMsg.type === 'success'
+                ? <CheckCircle2 className="w-3.5 h-3.5" />
+                : <AlertCircle className="w-3.5 h-3.5" />}
+              {restoreMsg.text}
             </p>
           )}
         </CardContent>
@@ -1231,6 +1313,10 @@ function SecurityTab() {
   const [showPw, setShowPw] = useState(false)
   const [pwMsg, setPwMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [pwLoading, setPwLoading] = useState(false)
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(null)
+  const [recoveryCopied, setRecoveryCopied] = useState(false)
+  const [recoveryLoading, setRecoveryLoading] = useState(false)
+  const [recoveryMsg, setRecoveryMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const handleReenroll = async () => {
     setEnrolling(true)
@@ -1255,7 +1341,7 @@ function SecurityTab() {
     e.preventDefault()
     setPwMsg(null)
     if (pwForm.next !== pwForm.confirm) { setPwMsg({ type: 'error', text: 'New passwords do not match.' }); return }
-    if (pwForm.next.length < 6) { setPwMsg({ type: 'error', text: 'Password must be at least 6 characters.' }); return }
+    if (pwForm.next.length < 12) { setPwMsg({ type: 'error', text: 'Password must be at least 12 characters.' }); return }
     setPwLoading(true)
     try {
       await api.post('/auth/change-password', {
@@ -1271,6 +1357,33 @@ function SecurityTab() {
       setPwMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to update password.' })
     } finally {
       setPwLoading(false)
+    }
+  }
+
+  const handleGenerateRecoveryToken = async () => {
+    setRecoveryLoading(true)
+    setRecoveryMsg(null)
+    try {
+      const { data } = await api.post('/auth/recovery-token/regenerate')
+      setRecoveryToken(data.recovery_token)
+      setRecoveryMsg({ type: 'success', text: 'New recovery token generated. Save it now; it will not be shown again.' })
+      await refreshStatus()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setRecoveryMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to generate recovery token.' })
+    } finally {
+      setRecoveryLoading(false)
+    }
+  }
+
+  const handleCopyRecoveryToken = async () => {
+    if (!recoveryToken) return
+    try {
+      await navigator.clipboard.writeText(recoveryToken)
+      setRecoveryCopied(true)
+      setTimeout(() => setRecoveryCopied(false), 2000)
+    } catch {
+      setRecoveryCopied(false)
     }
   }
 
@@ -1307,7 +1420,7 @@ function SecurityTab() {
                 <Label className="text-xs">New Password</Label>
                 <Input type={showPw ? 'text' : 'password'} value={pwForm.next}
                   onChange={e => setPwForm(f => ({ ...f, next: e.target.value }))}
-                  placeholder="At least 6 characters" />
+                  placeholder="At least 12 characters" />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Confirm New Password</Label>
@@ -1330,6 +1443,48 @@ function SecurityTab() {
                 </Button>
               </div>
             </form>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Recovery Token */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <KeyRound className="w-4 h-4" /> Recovery Token
+          </CardTitle>
+          <CardDescription>Reset a forgotten password without deleting local finance data</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            {status?.has_recovery_token
+              ? <Badge variant="outline" className="text-green-500 border-green-500/30 gap-1"><CheckCircle2 className="w-3 h-3" />Configured</Badge>
+              : <Badge variant="outline" className="text-amber-500 border-amber-500/30 gap-1"><AlertCircle className="w-3 h-3" />Missing</Badge>
+            }
+          </div>
+          <p className="text-sm text-muted-foreground">
+            The app stores only a secure hash. Generating a new token replaces the previous one, and the plain token is shown only once.
+          </p>
+          {recoveryToken && (
+            <div className="space-y-2 rounded-md border bg-muted/40 p-3">
+              <div className="rounded-md border bg-background p-3 font-mono text-sm break-all select-all">
+                {recoveryToken}
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={handleCopyRecoveryToken}>
+                {recoveryCopied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {recoveryCopied ? 'Copied' : 'Copy Token'}
+              </Button>
+            </div>
+          )}
+          <Button size="sm" variant="outline" onClick={handleGenerateRecoveryToken} disabled={recoveryLoading}>
+            {recoveryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {status?.has_recovery_token ? 'Generate New Token' : 'Generate Recovery Token'}
+          </Button>
+          {recoveryMsg && (
+            <p className={`text-xs flex items-center gap-1 ${recoveryMsg.type === 'success' ? 'text-green-500' : 'text-destructive'}`}>
+              {recoveryMsg.type === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+              {recoveryMsg.text}
+            </p>
           )}
         </CardContent>
       </Card>

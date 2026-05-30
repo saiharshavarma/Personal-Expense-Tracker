@@ -32,8 +32,9 @@ interface AuthStore {
 
   initialize: () => Promise<void>
   login: (password: string) => Promise<void>
+  resetPasswordWithRecoveryToken: (newPassword: string, confirmNewPassword: string, recoveryToken: string) => Promise<void>
   loginWithTouchId: () => Promise<void>
-  setupPassword: (password: string, confirmPassword: string) => Promise<void>
+  setupPassword: (password: string, confirmPassword: string) => Promise<string | null>
   completeSetup: () => void
   enrollTouchId: () => Promise<void>
   logout: () => void
@@ -65,7 +66,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { data } = await api.get<AuthStatus>('/auth/status')
       set({ status: data, isInitializing: false })
     } catch {
-      set({ status: { onboarding_complete: false, has_webauthn: false, has_password: false }, isInitializing: false })
+      set({ status: { onboarding_complete: false, has_webauthn: false, has_password: false, has_recovery_token: false }, isInitializing: false })
     }
   },
 
@@ -84,6 +85,23 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { data } = await api.post('/auth/login', { password })
       saveToken(data.access_token)
       set({ isAuthenticated: true, isLoading: false })
+    } catch (e) {
+      set({ isLoading: false, error: getAuthErrorMessage(e) })
+      throw e
+    }
+  },
+
+  resetPasswordWithRecoveryToken: async (newPassword: string, confirmNewPassword: string, recoveryToken: string) => {
+    set({ isLoading: true, error: null })
+    try {
+      const { data } = await api.post('/auth/forgot-password/reset', {
+        new_password: newPassword,
+        confirm_new_password: confirmNewPassword,
+        recovery_token: recoveryToken,
+      })
+      saveToken(data.access_token)
+      set({ isAuthenticated: true, isLoading: false })
+      await get().refreshStatus()
     } catch (e) {
       set({ isLoading: false, error: getAuthErrorMessage(e) })
       throw e
@@ -115,6 +133,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // before the Touch ID enrollment step can be shown.
       // completeSetup() handles both once enrollment is done or skipped.
       set({ isLoading: false })
+      return data.recovery_token ?? null
     } catch (e) {
       set({ isLoading: false, error: getAuthErrorMessage(e) })
       throw e

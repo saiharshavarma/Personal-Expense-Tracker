@@ -4,13 +4,13 @@ Date: 2026-05-29
 
 ## Result
 
-Much closer, but not a final production sign-off yet. Backend/data-integrity, responsiveness, backup snapshot integrity, load/performance, health, auth-blocking, and production-compose security checks now pass. A real Playwright E2E suite has been added and discovered, but the actual browser run was blocked by the local approval/usage gate in this session.
+Much closer, but not a final production sign-off yet. Backend/data-integrity, responsiveness, backup/restore integrity, load/performance, health, auth-blocking, and production-compose security checks now pass. A real Playwright E2E suite has been added and discovered, but the actual browser run was blocked by the local approval/usage gate in this session.
 
 ## Passed
 
 - Backend/data-integrity stress suite: 40/40 passed.
 - Responsive browser sweep: 44/44 passed across 11 routes and 4 viewport sizes.
-- Backup integrity suite: 16/16 passed.
+- Backup and restore integrity suite: 21/21 passed.
 - Load/performance suite: 18/18 passed with 5,000 generated transactions.
 - Security readiness suite: 8/8 passed against `docker-compose.prod.yml` and protected API routes.
 - Frontend production build: passed.
@@ -49,6 +49,11 @@ Much closer, but not a final production sign-off yet. Backend/data-integrity, re
   - Income schedules.
   - User preferences.
 - Removed generated `net_personal_cost` from backup snapshots so the artifact is safer for future restore tooling.
+- Added restore support:
+  - Backend `POST /api/backup/restore?confirm_restore=true`.
+  - Settings → Backup & Export restore upload UI.
+  - Restore preserves current login credentials while replacing finance data.
+  - Restore round-trip QA mutates the database after backup, restores from the backup, and verifies the mutation is gone.
 - Added `docker-compose.prod.yml` with explicit required production secrets/origins and no updater Docker-socket mount.
 - Added repeatable QA scripts:
   - `qa/run_backup_integrity_qa.py`
@@ -70,7 +75,6 @@ Minimum remaining actions:
 
 - Run `pnpm --dir frontend exec playwright test`.
 - If needed, first run `pnpm --dir frontend exec playwright install chromium`.
-- Implement an actual restore endpoint/CLI and run destructive backup -> wipe -> restore -> reconcile tests. Backup artifact integrity now passes, but restore itself still does not exist.
 - Add CI wiring for `qa/run_limit_qa.py`, `qa/run_backup_integrity_qa.py`, `qa/run_load_qa.py`, `qa/run_security_qa.py`, `qa/run_production_readiness_checks.py`, and Playwright.
 
 ## Existing Caveats

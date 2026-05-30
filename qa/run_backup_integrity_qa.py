@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import run_real_user_qa
-from run_real_user_qa import Client, PASSWORD, raw_post
+from run_real_user_qa import API, Client, PASSWORD, raw_post, raw_request
 
 
 QA_DIR = Path(__file__).resolve().parent
@@ -48,6 +48,26 @@ def login_client():
     return c
 
 
+def restore_backup(token, backup_bytes):
+    boundary = "----codexrestoreqa"
+    body = b"".join([
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="qa_restore.json.gz"\r\n'
+            f"Content-Type: application/gzip\r\n\r\n"
+        ).encode(),
+        backup_bytes,
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+    return raw_request(
+        "POST",
+        f"{API}/backup/restore?confirm_restore=true",
+        body,
+        token,
+        {"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+
 def main():
     results = []
     rc, output = seed_baseline()
@@ -78,7 +98,16 @@ def main():
     check(results, "trip count matches snapshot", len(snapshot["trips"]) == len(trips), f"snapshot={len(snapshot['trips'])} api={len(trips)}")
     check(results, "merchant rules count matches snapshot", len(snapshot["merchant_rules"]) == len(rules), f"snapshot={len(snapshot['merchant_rules'])} api={len(rules)}")
     check(results, "reimbursement batch count matches snapshot", len(snapshot["reimbursement_batches"]) == len(batches), f"snapshot={len(snapshot['reimbursement_batches'])} api={len(batches)}")
-    check(results, "preferences are included and masked enough for restore metadata", len(snapshot["user_preferences"]) == 1 and snapshot["user_preferences"][0]["currency"] == prefs["currency"], str(snapshot["user_preferences"]))
+    pref_row = snapshot["user_preferences"][0] if snapshot["user_preferences"] else {}
+    sensitive_pref_keys = {"password_hash", "recovery_token_hash", "webauthn_credential", "anthropic_api_key", "openai_api_key"}
+    check(
+        results,
+        "preferences are included and auth/secrets are redacted",
+        len(snapshot["user_preferences"]) == 1
+        and pref_row.get("currency") == prefs["currency"]
+        and sensitive_pref_keys.isdisjoint(pref_row),
+        str(snapshot["user_preferences"]),
+    )
     check(results, "import batches are included", len(snapshot["import_batches"]) >= 2, str(len(snapshot["import_batches"])))
 
     ids = [t["id"] for t in snapshot["transactions"]]
@@ -86,6 +115,25 @@ def main():
     check(results, "snapshot transaction ids are unique", len(ids) == len(set(ids)), "")
     check(results, "snapshot duplicate hashes are unique", len(hashes) == len(set(hashes)), "")
     check(results, "snapshot contains no generated net_personal_cost field", all("net_personal_cost" not in t for t in snapshot["transactions"]), "")
+
+    c.call("POST", "/transactions", {
+        "date": "2026-05-30",
+        "amount": 999.99,
+        "direction": "debit",
+        "description": "Restore Should Remove This",
+    })
+    mutated = c.call("GET", "/transactions", query={"page_size": 500})
+    check(results, "mutation before restore changes transaction count", mutated["total"] == txs["total"] + 1, str(mutated["total"]))
+
+    restored = restore_backup(c.token, backup_bytes)
+    after = c.call("GET", "/transactions", query={"page_size": 500})
+    after_prefs = c.call("GET", "/preferences")
+    relogin = Client()
+    relogin.token = relogin.call("POST", "/auth/login", {"password": PASSWORD})["access_token"]
+    check(results, "restore endpoint reports restored counts", restored["status"] == "success" and restored["restored"]["transactions"] == txs["total"], str(restored))
+    check(results, "restore removes post-backup mutation", after["total"] == txs["total"] and not any(t["description"] == "Restore Should Remove This" for t in after["items"]), str(after["total"]))
+    check(results, "restore preserves usable login credentials", bool(relogin.token), "")
+    check(results, "restore preserves restored preferences metadata", after_prefs["currency"] == prefs["currency"], str(after_prefs))
 
     report = build_report(results, snapshot)
     (QA_DIR / "backup_integrity_qa_report.md").write_text(report)
@@ -121,7 +169,7 @@ def build_report(results, snapshot):
         "",
         "## Restore Note",
         "",
-        "This validates that the backup artifact contains the domains required for restore. A restore endpoint/CLI is still not implemented, so a destructive automated restore round-trip cannot be claimed yet.",
+        "This validates backup artifact coverage and performs a destructive restore round-trip through POST /api/backup/restore.",
     ])
     return "\n".join(lines) + "\n"
 

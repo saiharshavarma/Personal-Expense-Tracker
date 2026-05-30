@@ -316,6 +316,7 @@ class UserPreferences(Base):
     dashboard_layout = sa.Column(JSONB, nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="USD")
     password_hash: Mapped[Optional[str]] = mapped_column(Text)
+    recovery_token_hash: Mapped[Optional[str]] = mapped_column(Text)
     webauthn_credential = sa.Column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

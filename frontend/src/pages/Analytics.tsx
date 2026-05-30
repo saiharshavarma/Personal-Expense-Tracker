@@ -250,6 +250,7 @@ function SavingsRateChart({ months, excludeReimbursable }: { months: number; exc
 
   // When income = 0, savings_rate is null. Fall back to dollar net savings.
   const hasRateData = data.some((d) => d.savings_rate != null)
+  const ratePointCount = data.filter((d) => d.savings_rate != null).length
   const color = hasRateData ? '#22c55e' : '#3b82f6'
   const gradId = hasRateData ? 'savingsGrad' : 'netGrad'
 
@@ -280,8 +281,8 @@ function SavingsRateChart({ months, excludeReimbursable }: { months: number; exc
           />
           <Tooltip content={<SavingsTooltip isAmount={!hasRateData} />} />
           {hasRateData
-            ? <Area dataKey="savings_rate" name="Savings Rate" stroke={color} strokeWidth={2} fill={`url(#${gradId})`} dot={false} />
-            : <Area dataKey="savings_amount" name="Net Savings" stroke={color} strokeWidth={2} fill={`url(#${gradId})`} dot={false} />
+            ? <Area dataKey="savings_rate" name="Savings Rate" stroke={color} strokeWidth={2} fill={`url(#${gradId})`} connectNulls dot={ratePointCount <= 2 ? { r: 3, strokeWidth: 2 } : false} activeDot={{ r: 4 }} />
+            : <Area dataKey="savings_amount" name="Net Savings" stroke={color} strokeWidth={2} fill={`url(#${gradId})`} dot={data.length <= 2 ? { r: 3, strokeWidth: 2 } : false} activeDot={{ r: 4 }} />
           }
         </AreaChart>
       </ResponsiveContainer>

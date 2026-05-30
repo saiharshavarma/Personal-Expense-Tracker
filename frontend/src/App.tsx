@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
+import { AnimatePresence, MotionConfig } from 'framer-motion'
 import { Toaster } from 'sonner'
 import { AuthGate } from '@/components/auth/AuthGate'
 import { SetupScreen } from '@/components/auth/SetupScreen'
@@ -20,42 +20,44 @@ import { Mascot } from '@/components/Mascot'
 
 export function App() {
   return (
-    <BrowserRouter>
-      <Toaster position="bottom-right" richColors closeButton duration={4000} />
-      <CommandPalette />
-      <AnimatePresence mode="wait">
-        <Routes>
-          {/* First-launch setup — no AuthGate */}
-          <Route path="/setup" element={<SetupScreen />} />
+    <MotionConfig reducedMotion="user" transition={{ type: 'spring', stiffness: 360, damping: 32 }}>
+      <BrowserRouter>
+        <Toaster position="bottom-right" richColors closeButton duration={4000} />
+        <CommandPalette />
+        <AnimatePresence mode="wait">
+          <Routes>
+            {/* First-launch setup — no AuthGate */}
+            <Route path="/setup" element={<SetupScreen />} />
 
-          {/* All authenticated routes wrapped in AuthGate */}
-          <Route
-            path="/*"
-            element={
-              <AuthGate>
-                {/* Mascot lives here — outside Routes so it never remounts on navigation */}
-                <Mascot />
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/transactions" element={<Transactions />} />
-                  <Route path="/import" element={<Import />} />
-                  <Route path="/analytics" element={<Analytics />} />
-                  <Route path="/budget" element={<Budget />} />
-                  <Route path="/reimbursements" element={<Reimbursements />} />
-                  <Route path="/subscriptions" element={<Subscriptions />} />
-                  <Route path="/trips" element={<Trips />} />
-                  <Route path="/ask-ai" element={<AskAI />} />
-                  <Route path="/advisor" element={<FinanceAdvisor />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/app-insights" element={<AppInsights />} />
-                  {/* Catch-all */}
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </AuthGate>
-            }
-          />
-        </Routes>
-      </AnimatePresence>
-    </BrowserRouter>
+            {/* All authenticated routes wrapped in AuthGate */}
+            <Route
+              path="/*"
+              element={
+                <AuthGate>
+                  {/* Mascot lives here — outside Routes so it never remounts on navigation */}
+                  <Mascot />
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/transactions" element={<Transactions />} />
+                    <Route path="/import" element={<Import />} />
+                    <Route path="/analytics" element={<Analytics />} />
+                    <Route path="/budget" element={<Budget />} />
+                    <Route path="/reimbursements" element={<Reimbursements />} />
+                    <Route path="/subscriptions" element={<Subscriptions />} />
+                    <Route path="/trips" element={<Trips />} />
+                    <Route path="/ask-ai" element={<AskAI />} />
+                    <Route path="/advisor" element={<FinanceAdvisor />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/app-insights" element={<AppInsights />} />
+                    {/* Catch-all */}
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </AuthGate>
+              }
+            />
+          </Routes>
+        </AnimatePresence>
+      </BrowserRouter>
+    </MotionConfig>
   )
 }
